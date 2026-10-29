@@ -1941,3 +1941,8 @@ depth=3               ; 往里找几层（0=只看目录本身，最多 6）
 - **修法（FileIndexer）**：游标 0 先探卷，开不了 → NoAccess 保留快照（cacheTooOld 不再否决这条退路）；usnstate 丢游标而快照头有效时就地恢复；提交前先 unmap + FILE_SHARE_DELETE；重建后 fresh 游标在 mapSnapshot 之后覆盖写回 m_vols（原来只写快照头，管理员机器也会每轮重建）；全量重建限流 1h；NoAccess 日志每会话每卷一次。
 - **部署坑（又一次）**：首次换装只拷了 ltool.exe —— 逻辑在 ltoolcore.dll，装上后行为还是旧的。对 dll 补 MD5 校验后重启才真生效。**以后部署必须 exe+全部项目 dll 一起校验。**
 - **验证**：重启即 "no admin rights, keep snapshot"；注入目录变更触发重扫只多一条 keep 日志、0 重建、skip 日志不再刷；IO 采样 ltool 已不在榜上。本修复在 master，随 1.5.2 发。
+
+## 2026-10-30 · v1.5.2 发布完成（重建风暴修复随版）
+- 流程：ltool.iss 升 1.5.2（91085ab）→ tag v1.5.2 → run 40949373815 success（约 1 小时）。
+- 对账：Release 非 draft，资产 24 个（20 颗插件 dll + setup 21.58MB + sdk.zip + plugins-index.json + sha256.txt）；postrelease_check POSTRELEASE_BAD=0；`releases/latest` 已 302 到 v1.5.2 —— 更新检测这条链通了。
+- 本机部署：exe + ltoolcore.dll（MD5 一致）已换 1.5.2 构建并重启，先于 Release。api.github.com 直连可用，全程没走 9980 代理。
