@@ -273,16 +273,24 @@ void FileIndexer::reindexAsync(bool forceDeep)
         if (deepEnabled) {
             const DeepStatus st = (haveCache && !forceDeep)
                 ? incrementalDeep() : DeepStatus::NeedRebuild;
+            const bool rateLimited = haveCache && !forceDeep
+                && m_hadFullRebuild && m_lastFullRebuild.elapsed() < 3600 * 1000;
             if (st == DeepStatus::Ok) {
                 Utils::log(QString("deep index incremental ok in %1ms (quick=%2 deep=%3)")
                                .arg(timer.elapsed()).arg(m_entries.size()).arg(deepCount()));
-            } else if (st == DeepStatus::NoAccess && !forceDeep && !cacheTooOld()) {
+            } else if (st == DeepStatus::NoAccess && !forceDeep) {
+                // 非管理员没有刷新深索引的手段：快照再旧也留着——旧快照好过
+                // 每次重扫都来一场全盘遍历（cacheTooOld 不再否决这条退路）
                 Utils::log(QString("deep index: no admin rights, keep snapshot "
                                    "(quick=%1 deep=%2)").arg(m_entries.size()).arg(deepCount()));
+            } else if (rateLimited) {
+                Utils::log("deep index: full rebuild rate-limited (<1h), keep snapshot");
             } else {
                 QElapsedTimer t2;
                 t2.start();
                 rebuildDeepAll();
+                m_lastFullRebuild.start();
+                m_hadFullRebuild = true;
                 Utils::log(QString("deep index full rebuild in %1s (quick=%2 deep=%3)")
                                .arg(t2.elapsed() / 1000).arg(m_entries.size()).arg(deepCount()));
             }
@@ -341,7 +349,7 @@ bool FileIndexer::mapSnapshot()
     unmapSnapshot();
     const QString path = Utils::dataDir() + "/deepindex.dat";
     HANDLE file = CreateFileW((LPCWSTR)QDir::toNativeSeparators(path).utf16(),
-                              GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE)
         return false;
@@ -618,17 +626,30 @@ void FileIndexer::rebuildDeepAll()
         out.append(v.arena);
     }
     f.write(out);
-    f.commit();
+    // 提交前先解除旧快照映射：旧文件还挂着本进程的映射句柄（CreateFileW
+    // 没给 FILE_SHARE_DELETE），rename-over 必败 —— deepindex.dat 停在
+    // 10-03 不动、每次重建都白扫，就是这一行顺序造成的。
+    {
+        QWriteLocker lock(&m_lock);
+        unmapSnapshot();
+    }
+    if (!f.commit())
+        Utils::log(QString("deep index: snapshot commit failed: %1").arg(f.errorString()));
 
     // 重映射文件并重置增量（写锁保护：搜索线程可能正遍历旧映射视图）
     {
         QWriteLocker lock(&m_lock);
-        unmapSnapshot();
         m_add.clear();
         m_addArena.clear();
         m_removed.clear();
         if (!mapSnapshot())
             Utils::log("deep index: snapshot written but remap failed");
+        // 重建后的游标以 fresh 为准。必须放在 mapSnapshot 之后：
+        // 它内部的 loadUsnState 会拿 usnstate.dat 的旧值（可能是 0）合并进
+        // m_vols，盖掉的话管理员机器每轮重扫都会因“游标为 0”再全量重建
+        m_vols.clear();
+        for (const FreshVol& v : fresh)
+            m_vols.append({v.root, v.journalId, v.nextUsn});
     }
     saveUsnState();
 }
@@ -674,14 +695,36 @@ FileIndexer::DeepStatus FileIndexer::incrementalDeep()
             m_vols.append({mv.root, mv.journalId, mv.nextUsn});
             cur = &m_vols.last();
         }
-        if (cur->journalId == 0 || cur->nextUsn == 0 || mv.count == 0) {
-            status = DeepStatus::NeedRebuild;
-            continue;
+        if (cur->journalId == 0 || cur->nextUsn == 0) {
+            // usnstate 里的游标丢了（比如被无管理员会话的重建写成 0）：快照头若还
+            // 记着有效游标就就地恢复——快照本身就是按它构建的，从它增量即可，
+            // 不必重建。两头都是 0 才探卷：开不了（非管理员）→ NoAccess 保留快照；
+            // 开得开（管理员）→ 走一次全量重建把游标修好，此后就能增量。
+            if (mv.journalId != 0 && mv.nextUsn != 0) {
+                cur->journalId = mv.journalId;
+                cur->nextUsn = mv.nextUsn;
+            } else {
+                UsnIndex::VolumeHandle probe;
+                if (!probe.open(mv.root)) {
+                    if (!m_noAccessLogged.contains(mv.root)) {
+                        m_noAccessLogged.insert(mv.root);
+                        Utils::log(QString("usn incremental skip %1: open failed err=%2 (需要管理员权限)")
+                                       .arg(mv.root).arg(GetLastError()));
+                    }
+                    status = DeepStatus::NoAccess;
+                } else {
+                    status = DeepStatus::NeedRebuild;
+                }
+                continue;
+            }
         }
         UsnIndex::VolumeHandle vol;
         if (!vol.open(mv.root)) {
-            Utils::log(QString("usn incremental skip %1: open failed err=%2 (需要管理员权限)")
-                           .arg(mv.root).arg(GetLastError()));
+            if (!m_noAccessLogged.contains(mv.root)) {
+                m_noAccessLogged.insert(mv.root);
+                Utils::log(QString("usn incremental skip %1: open failed err=%2 (需要管理员权限)")
+                               .arg(mv.root).arg(GetLastError()));
+            }
             status = DeepStatus::NoAccess;
             continue;
         }

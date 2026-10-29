@@ -1933,3 +1933,11 @@ depth=3               ; 往里找几层（0=只看目录本身，最多 6）
 - **修法**：锁改为**调用方持有**的约定（mapSnapshot/unmapSnapshot 不再自拿，函数头注释写明），`reindexAsync` 的首映射调用点补上写锁。修后 19 面旗本地全套 0 红（含 --mfttest/--diskbranch）。
 - **tag 处理**：旧 v1.5.1（指向 0e12655）删掉重打到修复提交 a743b23。那趟没产出任何资产（`/releases/tags/v1.5.1` API 404、latest 仍指 v1.5.0），网页上那个"Release v1.5.1"只是 GitHub 给已存在 tag 渲染的占位页，不算发过 —— 同号没有出过两份产物。
 - 顺带：把这台机上装着的第一版 1.5.1（带死锁）换成修复版（robocopy 排除 data\captures\recordings，这次没再碰他的数据）。
+
+## 2026-10-30 · v1.5.1 发布完成（对账全绿）；顺带挖出并修掉"重建风暴"（用户报高读写+CPU）
+- **发布**：tag run 40186085197 success，Release v1.5.1 非 draft，资产 24 个（20 颗插件 dll + setup 21.58MB + sdk.zip + plugins-index.json + sha256.txt）；postrelease_check 三查 POSTRELEASE_BAD=0（说明无家目录泄漏、商店链 200/20 条、sha256 对得上）。api.github.com 这会儿直连通，没走 9980 代理。
+- **现象**：装机 log.txt 一天 40~131 条 "deep index full rebuild in 22~37s"，每场 30 秒级全盘遍历；进程日烧 2.2 CPU 时，任务管理器磁盘/CPU 居高。
+- **根因链**：① 10-26 起进程非管理员（此前提权会话 USN 增量毫秒级），卷 err=5；② usnstate 游标为 0（快照头也 0，出自无管理员 walk 重建），incrementalDeep 见 0 直接 NeedRebuild、不探卷；③ rebuildDeepAll 回退全盘 walk，快照提交时旧 mmap 还开着（先 commit 后 unmap、CreateFileW 无 FILE_SHARE_DELETE）→ rename-over 必败 → deepindex.dat 停在 10-03，状态永不愈合；④ walk 重建又把 0 游标写回 usnstate → 死循环。触发器：116 个被监视快捷方式目录的任何变更（60s 节流），机器一动就是一场。
+- **修法（FileIndexer）**：游标 0 先探卷，开不了 → NoAccess 保留快照（cacheTooOld 不再否决这条退路）；usnstate 丢游标而快照头有效时就地恢复；提交前先 unmap + FILE_SHARE_DELETE；重建后 fresh 游标在 mapSnapshot 之后覆盖写回 m_vols（原来只写快照头，管理员机器也会每轮重建）；全量重建限流 1h；NoAccess 日志每会话每卷一次。
+- **部署坑（又一次）**：首次换装只拷了 ltool.exe —— 逻辑在 ltoolcore.dll，装上后行为还是旧的。对 dll 补 MD5 校验后重启才真生效。**以后部署必须 exe+全部项目 dll 一起校验。**
+- **验证**：重启即 "no admin rights, keep snapshot"；注入目录变更触发重扫只多一条 keep 日志、0 重建、skip 日志不再刷；IO 采样 ltool 已不在榜上。本修复在 master，随 1.5.2 发。

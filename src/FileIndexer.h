@@ -3,6 +3,7 @@
 
 #include <QAtomicInt>
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QObject>
 #include <QReadWriteLock>
@@ -108,4 +109,11 @@ private:
 
     void* m_watchCtx = nullptr;
     QAtomicInt m_running {0};
+
+    // 全量重建限流：非管理员机器上游标恒为 0、卷又开不了，每次重扫都会滑进
+    // 一次 30 秒级的全盘遍历（2026-10-26 起的 CPU/磁盘风暴）。有快照时 1 小时内
+    // 不重复重建，宁可保留旧快照。只在 worker 线程里读写（m_running 串行化）。
+    QElapsedTimer m_lastFullRebuild;
+    bool m_hadFullRebuild = false;
+    QSet<QString> m_noAccessLogged;   // 每会话每卷只记一次“开不了卷”，防日志刷屏
 };
