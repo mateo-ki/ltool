@@ -3,7 +3,7 @@
  "Name": "注册表分析",
  "Desc": "扫失效路径与 9x 遗留键：卸载残留 / 启动项 / 关联 / COM / 服务 / 死盘符",
  "Api": 4,
- "Version": "1.0.2",
+ "Version": "1.0.3",
  "Keywords": [
   "注册表",
   "registry",

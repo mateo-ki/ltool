@@ -5,23 +5,86 @@
 #include "StartupAudit.h"
 #include "Utils.h"
 
+#include <windows.h>
+#include <shellapi.h>
+
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QFile>
+#include <QFrame>
 #include <QFutureWatcher>
 #include <QGuiApplication>
+#include <QHash>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QListWidget>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
+#include <QScrollBar>
+#include <QStyle>
 #include <QTextStream>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
 namespace {
+
+QPixmap iconForStartup(const StartupItem& it)
+{
+    static QHash<QString, QPixmap> s_cache;
+    if (!it.targetPath.isEmpty()) {
+        if (s_cache.contains(it.targetPath))
+            return s_cache.value(it.targetPath);
+        HICON hLarge = nullptr, hSmall = nullptr;
+        if (ExtractIconExW((LPCWSTR)it.targetPath.utf16(), 0, &hLarge, &hSmall, 1) > 0) {
+            HICON chosen = hSmall ? hSmall : hLarge;
+            QImage img = QImage::fromHICON(chosen);
+            if (hLarge) DestroyIcon(hLarge);
+            if (hSmall && hSmall != hLarge) DestroyIcon(hSmall);
+            if (!img.isNull()) {
+                QPixmap pm = QPixmap::fromImage(img.scaled(20, 20, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                s_cache.insert(it.targetPath, pm);
+                return pm;
+            }
+        }
+    }
+    const QString key = QStringLiteral("src_%1").arg(int(it.source));
+    if (s_cache.contains(key))
+        return s_cache.value(key);
+    QPixmap pm(20, 20);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    QColor col;
+    QString sym;
+    switch (it.source) {
+    case StartupItem::Source::RegistryRun:
+        col = QColor(249, 115, 22); sym = QStringLiteral("⚡"); break;
+    case StartupItem::Source::StartupFolder:
+        col = QColor(234, 179, 8); sym = QStringLiteral("📁"); break;
+    case StartupItem::Source::Service:
+        col = QColor(6, 182, 212); sym = QStringLiteral("⚙"); break;
+    case StartupItem::Source::Task:
+        col = QColor(168, 85, 247); sym = QStringLiteral("⏱"); break;
+    case StartupItem::Source::ShellExtension:
+        col = QColor(59, 130, 246); sym = QStringLiteral("🧩"); break;
+    }
+    p.setPen(QPen(col, 1));
+    p.setBrush(QColor(col.red(), col.green(), col.blue(), 40));
+    p.drawRoundedRect(QRectF(1, 1, 18, 18), 4, 4);
+    QFont f = p.font();
+    f.setPointSize(8);
+    f.setBold(true);
+    p.setFont(f);
+    p.setPen(col);
+    p.drawText(QRect(0, 0, 20, 20), Qt::AlignCenter, sym);
+    s_cache.insert(key, pm);
+    return pm;
+}
 
 bool isProblem(const StartupItem& it)
 {
@@ -148,8 +211,57 @@ QString shortVerdict(const StartupItem& it, InfoRow::Badge* kind)
 StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
 {
     auto* lay = new QVBoxLayout(this);
-    lay->setContentsMargins(12, 6, 6, 6);
+    lay->setContentsMargins(12, 10, 12, 10);
     lay->setSpacing(8);
+
+    // 顶部 Hero 卡片
+    auto* heroCard = new QFrame(this);
+    heroCard->setObjectName(QStringLiteral("heroCard"));
+    auto* heroLay = new QVBoxLayout(heroCard);
+    heroLay->setContentsMargins(14, 10, 14, 10);
+    heroLay->setSpacing(6);
+
+    auto* titleRow = new QHBoxLayout;
+    titleRow->setSpacing(8);
+
+    auto* badgeIcon = new QLabel(heroCard);
+    badgeIcon->setFixedSize(22, 22);
+    badgeIcon->setStyleSheet("background:transparent;border:none;");
+    {
+        QPixmap pm(22, 22);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setBrush(QColor(249, 115, 22, 40));
+        p.setPen(QPen(QColor(249, 115, 22, 160), 1));
+        p.drawRoundedRect(QRectF(1, 1, 20, 20), 5, 5);
+        p.setPen(QColor(249, 115, 22));
+        QFont f = p.font();
+        f.setBold(true);
+        f.setPointSize(9);
+        p.setFont(f);
+        p.drawText(QRect(0, 0, 22, 22), Qt::AlignCenter, QStringLiteral("⚡"));
+        badgeIcon->setPixmap(pm);
+    }
+
+    auto* title = new QLabel(QStringLiteral("开机自启动分析与治理"), heroCard);
+    title->setStyleSheet("color:#f8fafc;font-size:13.5px;font-weight:700;background:transparent;border:none;");
+
+    auto* tag1 = new QLabel(QStringLiteral("⚡ 就地两段安全切换"), heroCard);
+    tag1->setStyleSheet("color:#f97316;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.25);border-radius:4px;padding:2px 7px;font-size:10.5px;font-weight:500;");
+
+    auto* tag2 = new QLabel(QStringLiteral("🛡️ 原生同步任务管理器"), heroCard);
+    tag2->setStyleSheet("color:#38bdf8;background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.25);border-radius:4px;padding:2px 7px;font-size:10.5px;font-weight:500;");
+
+    auto* tag3 = new QLabel(QStringLiteral("🔍 5 大自启源全量排查"), heroCard);
+    tag3->setStyleSheet("color:#a78bfa;background:rgba(167,139,250,0.12);border:1px solid rgba(167,139,250,0.25);border-radius:4px;padding:2px 7px;font-size:10.5px;font-weight:500;");
+
+    titleRow->addWidget(badgeIcon);
+    titleRow->addWidget(title);
+    titleRow->addWidget(tag1);
+    titleRow->addWidget(tag2);
+    titleRow->addWidget(tag3);
+    titleRow->addStretch(1);
 
     auto* tip = new QLabel(QStringLiteral(
         "这一页回答三个问题：开机后有东西自己起来吗？都是谁？哪些该管？\n"
@@ -157,20 +269,41 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
         "红字是文件已经不在了的（建议清），灰字是已经被关掉的（不用管），黄字是没有数字签名的（自己判断）。\n"
         "选中「登录以后自动启动的程序」或「放在“启动”文件夹里的东西」那两栏里的某一行，点「禁用这一项」就能关掉它"
         "（要按两下，第一下只是确认）；已经关掉的选中后点「恢复这一项」就回来。"
-        "写的就是任务管理器 · 启动 里那同一个开关，随时能反回来。服务、计划任务、加载项这一页不动。"), this);
+        "写的就是任务管理器 · 启动 里那同一个开关，随时能反回来。服务、计划任务、加载项这一页不动。"), heroCard);
     tip->setObjectName(QStringLiteral("tip"));
     tip->setWordWrap(true);
-    lay->addWidget(tip);
+    tip->setStyleSheet("color:#94a3b8;font-size:11.5px;line-height:1.45;background:transparent;border:none;");
 
+    heroLay->addLayout(titleRow);
+    heroLay->addWidget(tip);
+    lay->addWidget(heroCard);
+
+    // 操作工具栏
     auto* row = new QHBoxLayout;
+    row->setSpacing(8);
     m_scanBtn = new QPushButton(QStringLiteral("开始分析"), this);
+    m_scanBtn->setObjectName(QStringLiteral("scanBtn"));
+    m_scanBtn->setCursor(Qt::PointingHandCursor);
+    m_scanBtn->setMinimumWidth(110);
+    m_scanBtn->setMinimumHeight(30);
+
     auto* reportBtn = new QPushButton(QStringLiteral("导出报告"), this);
+    reportBtn->setCursor(Qt::PointingHandCursor);
+    reportBtn->setMinimumHeight(30);
+
     auto* tsMgr = new QPushButton(QStringLiteral("打开任务管理器的启动项设置"), this);
+    tsMgr->setCursor(Qt::PointingHandCursor);
+    tsMgr->setMinimumHeight(30);
+
     // 就地两段，不弹模态框：这一页是从设置窗里翻进来的，模态框会被自藏的启动器吞掉
     //（那的表现就是"这个功能永久点了没反应"，他在那一侧吃过一次）。
     m_toggleBtn = new QPushButton(QStringLiteral("禁用这一项"), this);
     m_toggleBtn->setObjectName(QStringLiteral("startupToggle"));
+    m_toggleBtn->setCursor(Qt::PointingHandCursor);
     m_toggleBtn->setEnabled(false);
+    m_toggleBtn->setMinimumHeight(30);
+    m_toggleBtn->setMinimumWidth(115);
+
     row->addWidget(m_scanBtn);
     row->addWidget(reportBtn);
     row->addWidget(tsMgr);
@@ -178,41 +311,114 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
     row->addStretch(1);
     lay->addLayout(row);
 
+    // 过滤选择栏
     auto* filterRow = new QHBoxLayout;
-    filterRow->addWidget(new QLabel(QStringLiteral("只看哪一类："), this));
+    filterRow->setSpacing(12);
+    auto* filterLbl = new QLabel(QStringLiteral("只看哪一类："), this);
+    filterLbl->setStyleSheet("color:#94a3b8;font-size:12px;font-weight:500;");
+    filterRow->addWidget(filterLbl);
+
     m_filter = new QComboBox(this);
+    m_filter->setCursor(Qt::PointingHandCursor);
     m_filter->addItem(QStringLiteral("全部"));
     for (const auto s : { StartupItem::Source::RegistryRun, StartupItem::Source::StartupFolder,
                           StartupItem::Source::Service, StartupItem::Source::Task,
                           StartupItem::Source::ShellExtension })
         m_filter->addItem(plainGroup(s), int(s));
+
     m_onlyProblems = new QCheckBox(QStringLiteral("只看需要我处理的"), this);
+    m_onlyProblems->setCursor(Qt::PointingHandCursor);
+
     // 系统服务默认不列（他 2026-10-21 点名）：一台机器上自动启动的服务几十上百条，
     // 全在 %SystemRoot% 下面，混在"谁开机自己起来"那一堆里只会把要看的东西挤掉。
     // 但不许"悄悄少一批" —— 这颗开关 + 汇总那句"另有 N 条没列出"就是留给这件事的出口。
     m_showSysSvc = new QCheckBox(QStringLiteral("显示系统服务"), this);
     m_showSysSvc->setObjectName(QStringLiteral("startupShowSysSvc"));
+    m_showSysSvc->setCursor(Qt::PointingHandCursor);
+
     filterRow->addWidget(m_filter);
     filterRow->addWidget(m_onlyProblems);
     filterRow->addWidget(m_showSysSvc);
     filterRow->addStretch(1);
     lay->addLayout(filterRow);
 
+    // 状态统计看板
+    auto* summaryCard = new QFrame(this);
+    summaryCard->setObjectName(QStringLiteral("summaryCard"));
+    auto* sumLay = new QHBoxLayout(summaryCard);
+    sumLay->setContentsMargins(12, 8, 12, 8);
+    sumLay->setSpacing(8);
+
+    auto* sumIcon = new QLabel(QStringLiteral("📊"), summaryCard);
+    sumIcon->setStyleSheet("font-size:13px;background:transparent;border:none;");
+
     m_summary = new QLabel(QStringLiteral("点「开始分析」，把这台机器开机时会自己起来的东西列一遍，"
-                                          "每一行都会告诉你它什么时候跑、谁家的、要不要管。"), this);
+                                          "每一行都会告诉你它什么时候跑、谁家的、要不要管。"), summaryCard);
     m_summary->setObjectName(QStringLiteral("muted"));
     m_summary->setProperty("testId", "startupSummary");
     m_summary->setWordWrap(true);
-    lay->addWidget(m_summary);
+    m_summary->setStyleSheet("color:#cbd5e1;font-size:12px;background:transparent;border:none;");
+
+    sumLay->addWidget(sumIcon);
+    sumLay->addWidget(m_summary, 1);
+    lay->addWidget(summaryCard);
 
     m_list = new QListWidget(this);
+    m_list->setObjectName(QStringLiteral("startupList"));
     lay->addWidget(m_list, 1);
 
-    m_status = new QLabel(QStringLiteral("选中一行可以看它的完整注册位置和命令行。"), this);
+    // 底部详情卡
+    auto* statusCard = new QFrame(this);
+    statusCard->setObjectName(QStringLiteral("statusCard"));
+    auto* statLay = new QVBoxLayout(statusCard);
+    statLay->setContentsMargins(12, 8, 12, 8);
+    statLay->setSpacing(4);
+
+    auto* statTitle = new QLabel(QStringLiteral("📍 启动项路径与调用详情"), statusCard);
+    statTitle->setStyleSheet("color:#64748b;font-size:10.5px;font-weight:600;letter-spacing:0.5px;background:transparent;border:none;");
+
+    m_status = new QLabel(QStringLiteral("选中一行可以看它的完整注册位置和命令行。"), statusCard);
     m_status->setObjectName(QStringLiteral("muted"));
     m_status->setProperty("testId", "startupStatus");
     m_status->setWordWrap(true);
-    lay->addWidget(m_status);
+    m_status->setStyleSheet("color:#94a3b8;font-size:11.5px;background:transparent;border:none;font-family:'Segoe UI','Consolas',monospace;");
+
+    statLay->addWidget(statTitle);
+    statLay->addWidget(m_status);
+    lay->addWidget(statusCard);
+
+    setStyleSheet(
+        "QFrame#heroCard{background:#181a22;border:1px solid #282b37;border-radius:8px;}"
+        "QFrame#summaryCard{background:#15161c;border:1px solid #262934;border-radius:6px;}"
+        "QFrame#statusCard{background:#15161c;border:1px solid #262934;border-radius:6px;}"
+        "QListWidget#startupList{background:#131419;border:1px solid #262934;border-radius:8px;padding:4px;outline:none;}"
+        "QListWidget#startupList::item{border:none;margin:1px 0;}"
+        "QListWidget#startupList::item:hover{background:#1c1d25;border-radius:6px;}"
+        "QListWidget#startupList::item:selected{background:#20273a;border-radius:6px;}"
+        "QScrollBar:vertical{background:transparent;width:6px;margin:4px 0;}"
+        "QScrollBar::handle:vertical{background:#333644;border-radius:3px;min-height:20px;}"
+        "QScrollBar::handle:vertical:hover{background:#4b5063;}"
+        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}"
+        "QPushButton{background:#22242e;color:#e2e8f0;border:1px solid #333644;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:500;}"
+        "QPushButton:hover{background:#2b2e3b;border:1px solid #434758;}"
+        "QPushButton:pressed{background:#1d1e26;}"
+        "QPushButton#scanBtn{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #2563eb,stop:1 #3b82f6);color:#ffffff;font-weight:600;border:1px solid #3b82f6;}"
+        "QPushButton#scanBtn:hover{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #3b82f6,stop:1 #60a5fa);border:1px solid #60a5fa;}"
+        "QPushButton#scanBtn:pressed{background:#1d4ed8;}"
+        "QPushButton#scanBtn:disabled{background:#262832;color:#64748b;border:1px solid #323542;}"
+        "QPushButton#startupToggle:disabled{background:#22242c;color:#555866;border:1px solid #2e303c;}"
+        "QPushButton#startupToggle:enabled{background:#2a2622;color:#fb923c;border:1px solid #7c2d12;font-weight:600;}"
+        "QPushButton#startupToggle:enabled:hover{background:#382c24;border:1px solid #ea580c;color:#fed7aa;}"
+        "QPushButton#startupToggle[armed=\"true\"]{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #dc2626,stop:1 #ef4444);color:#ffffff;border:1px solid #ef4444;font-weight:700;}"
+        "QComboBox{background:#181a22;color:#cbd5e1;border:1px solid #2e313d;border-radius:6px;padding:4px 10px;font-size:12px;}"
+        "QComboBox:hover{border:1px solid #3f4455;}"
+        "QComboBox::drop-down{border:none;width:20px;}"
+        "QComboBox QAbstractItemView{background:#181a22;color:#cbd5e1;border:1px solid #2e313d;selection-background-color:#20273a;selection-color:#38bdf8;padding:4px;outline:none;}"
+        "QCheckBox{color:#cbd5e1;font-size:12px;spacing:6px;}"
+        "QCheckBox::indicator{width:16px;height:16px;border-radius:4px;border:1px solid #3a3e4e;background:#181a22;}"
+        "QCheckBox::indicator:hover{border-color:#38bdf8;}"
+        "QCheckBox::indicator:checked{background:#2563eb;border-color:#3b82f6;}"
+    );
 
     connect(m_scanBtn, &QPushButton::clicked, this, &StartupPage::startScan);
     connect(reportBtn, &QPushButton::clicked, this, &StartupPage::exportReport);
@@ -310,10 +516,11 @@ void StartupPage::rebuildList()
         m_list->addItem([this] {
             auto* s = new QListWidgetItem();
             s->setFlags(Qt::NoItemFlags);
-            s->setSizeHint(QSize(0, 30));
-            s->setForeground(QColor(125, 134, 152));
+            s->setSizeHint(QSize(0, 32));
+            s->setForeground(QColor(148, 163, 184));
             QFont f = s->font();
             f.setBold(true);
+            f.setPointSize(9);
             s->setFont(f);
             return s;
         }());
@@ -333,6 +540,7 @@ void StartupPage::rebuildList()
             auto* row = new InfoRow(it.name,
                                     QStringLiteral("%1 · %2").arg(whenLabel(it), whoLabel(it)),
                                     badge, kind);
+            row->setIconPixmap(iconForStartup(it));
             m_list->addItem(item);
             m_list->setItemWidget(item, row);
         }
@@ -365,6 +573,9 @@ void StartupPage::rebuildList()
     // 列表刚重建，选中已经没了 —— 那颗按钮不能留着上一轮的状态
     m_toggleBtn->setEnabled(false);
     m_toggleBtn->setText(QStringLiteral("禁用这一项"));
+    m_toggleBtn->setProperty("armed", false);
+    m_toggleBtn->style()->unpolish(m_toggleBtn);
+    m_toggleBtn->style()->polish(m_toggleBtn);
 }
 
 void StartupPage::showSelected(int i)
@@ -376,6 +587,9 @@ void StartupPage::showSelected(int i)
                           .arg(it.name, whenLabel(it), whoLabel(it), verdictLabel(it), it.location,
                                it.command.isEmpty() ? QStringLiteral("（看不到命令行）") : it.command));
     m_armed.clear();
+    m_toggleBtn->setProperty("armed", false);
+    m_toggleBtn->style()->unpolish(m_toggleBtn);
+    m_toggleBtn->style()->polish(m_toggleBtn);
     // 只有记到了 StartupApproved 那条路径的（注册表 Run / 启动文件夹）能由这页开关。
     const bool canToggle = !it.approvedPath.isEmpty();
     m_toggleBtn->setEnabled(canToggle);
@@ -410,9 +624,15 @@ void StartupPage::toggleSelected()
                                          "（这是任务管理器 · 启动 里的那个开关，随时能反回来）。")
                               .arg(want, it.name));
         m_toggleBtn->setText(QStringLiteral("再点一次确认%1").arg(want));
+        m_toggleBtn->setProperty("armed", true);
+        m_toggleBtn->style()->unpolish(m_toggleBtn);
+        m_toggleBtn->style()->polish(m_toggleBtn);
         return;
     }
     m_armed.clear();
+    m_toggleBtn->setProperty("armed", false);
+    m_toggleBtn->style()->unpolish(m_toggleBtn);
+    m_toggleBtn->style()->polish(m_toggleBtn);
     const QString why = StartupAudit::setStartupEnabled(it, !it.enabled);
     if (!why.isEmpty()) {
         m_toggleBtn->setText(it.enabled ? QStringLiteral("禁用这一项") : QStringLiteral("恢复这一项"));
