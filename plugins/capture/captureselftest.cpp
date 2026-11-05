@@ -586,6 +586,17 @@ extern "C" Q_DECL_EXPORT int ltoolPintoolRun()
     pw2.setPinned(true);
     check("切回一直置顶生效", pw2.isPinned() ? "yes" : "no", "yes");
 
+    // ---- 验证黑边修复：默认收起状态下，单点放出工具栏（往期带保持收起），绝不能多出 76px 黑边 ----
+    {
+        QPixmap wideShot(600, 300);
+        wideShot.fill(Qt::blue);
+        PinWindow pw3(wideShot, QString(), false); // 默认两样都收起
+        check("新窗默认收起时宽=图宽", QString::number(pw3.width()), "600");
+        pw3.setBarHidden(false); // 用户只单点「显示工具栏」！
+        check("单点显示工具栏后宽仍等于图宽（绝不多出76px黑边）", QString::number(pw3.width()), "600");
+        check("单点显示工具栏后图区宽=图宽", QString::number(pw3.probeImageRect().width()), "600");
+    }
+
     std::printf("pintool: 失败 %d 项\n", bad);
     std::fflush(stdout);
     return bad == 0 ? 0 : 1;

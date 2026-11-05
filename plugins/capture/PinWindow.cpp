@@ -1361,10 +1361,11 @@ void PinWindow::setBarHidden(bool hide)
 {
     if (m_barHidden == hide)
         return;
-    const QRect fit = imageRect();   // 收起前图实际占的那块（含往期带右边的居中留白）
+    const QRect fit = imageRect();   // 收起前图实际占的那块
     m_barHidden = hide;
     if (m_toolbar)
         m_toolbar->setVisible(!hide);
+    const int minToolbarW = m_toolbar ? qMax(200, m_toolbar->sizeHint().width()) : 434;
     if (hide) {
         m_sizeBeforeBar = size();
         m_minWBeforeBar = minimumWidth();
@@ -1374,9 +1375,14 @@ void PinWindow::setBarHidden(bool hide)
         setMinimumWidth(hug);
         resize(hug, qMax(60, fit.height()));
     } else {
-        if (m_minWBeforeBar > 0)
-            setMinimumWidth(m_minWBeforeBar);
-        resize(m_sizeBeforeBar.width(), m_sizeBeforeBar.height());
+        const int minW = m_minWBeforeBar > 0 ? m_minWBeforeBar : minToolbarW;
+        setMinimumWidth(minW);
+        // 放出工具栏：宽度必须精准匹配当前实际的「往期带 + 图宽」（有工具栏时至少为 minW 保证按钮完整）。
+        // 绝不能直接拿旧的 m_sizeBeforeBar.width()，否则若收起时往期带开着（76px）、现在收着，
+        // 窗口会被强行撑宽 76px，导致图右侧出现大块黑边。
+        const int targetW = qMax(minW, m_stripW + fit.width());
+        const int targetH = fit.height() + kToolbarH;
+        resize(targetW, targetH);
     }
     placeToolbar();
     placeNav();
@@ -1390,17 +1396,22 @@ void PinWindow::setStripHidden(bool hide)
 {
     if (m_stripHidden == hide)
         return;
+    const QRect fit = imageRect();
     m_stripHidden = hide;
     const int was = m_stripW;
     m_stripW = hide ? 0 : kStripW;
     if (m_histBtn)
         m_histBtn->setChecked(!hide);   // 右键菜单也能改，按钮状态要跟着走
-    const int minW = qMax(60, minimumWidth());
+    const int minToolbarW = (m_toolbar && !m_barHidden) ? qMax(200, m_toolbar->sizeHint().width()) : 60;
+    const int minW = qMax(60, minToolbarW);
+    setMinimumWidth(minW);
     if (hide) {
         m_sizeBeforeStrip = size();
-        resize(qMax(minW, width() + (m_stripW - was)), height());
+        const int targetW = qMax(minW, m_stripW + fit.width());
+        resize(targetW, height());
     } else {
-        resize(qMax(minW, m_sizeBeforeStrip.width()), height());
+        const int targetW = qMax(minW, m_stripW + fit.width());
+        resize(targetW, height());
     }
     applyHug();   // 工具栏也收着的话，往期带这一收窗口还能再窄一截
     placeNav();
