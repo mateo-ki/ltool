@@ -44,6 +44,8 @@ public:
     // 自测（--pintool）也直接调它们，所以放公开。
     void setBarHidden(bool hide);
     void setStripHidden(bool hide);
+    void setPinned(bool on);
+    bool isPinned() const { return m_pinned; }
     void applyHug();   // 工具栏收起时把窗口收到"抱住图"（两个开关共用）
     bool barHidden() const { return m_barHidden; }
     bool stripHidden() const { return m_stripHidden; }
@@ -154,7 +156,7 @@ private:
     QPushButton* m_pinBtn = nullptr;
     QWidget* m_prevBtn = nullptr;
     QWidget* m_nextBtn = nullptr;
-    bool m_pinned = false;        // false = 默认：失去焦点就把"永远在最前"让出去
+    bool m_pinned = true;         // 默认：一直置顶（钉在桌面）；工具栏/右键可切为自动让位
     Qt::Edges m_edge;             // 正在拖哪几条边缩放
     QRect m_geoAtPress;
     QPoint m_pressGlobal;

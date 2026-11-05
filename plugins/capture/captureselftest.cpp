@@ -564,6 +564,28 @@ extern "C" Q_DECL_EXPORT int ltoolPintoolRun()
           pw2.width() <= pw2.stripW() + 380 ? "yes" : "no", "yes");
     check("图够宽时放出工具栏：图按原尺寸摆（没被夹小）",
           pw2.probeImageRect().width() == 380 ? "yes" : "no", "yes");
+
+    // ---- 验证置顶特性：默认必须一直置顶（钉在桌面，切别的软件绝不能掉到最下面）----
+    check("默认必须是一直置顶", pw2.isPinned() ? "yes" : "no", "yes");
+    QPushButton* pinBtn = nullptr;
+    for (QPushButton* b : pw2.findChildren<QPushButton*>()) {
+        if (b->accessibleName() == QStringLiteral("一直置顶") || b->accessibleName() == QStringLiteral("自动让位")) {
+            pinBtn = b;
+            break;
+        }
+    }
+    check("找到置顶切换按钮", pinBtn != nullptr ? "yes" : "no", "yes");
+    if (pinBtn) {
+        check("置顶按钮支持选中态", pinBtn->isCheckable() ? "yes" : "no", "yes");
+        check("置顶按钮默认处于选中态", pinBtn->isChecked() ? "yes" : "no", "yes");
+    }
+    pw2.setPinned(false);
+    check("切换为自动让位生效", !pw2.isPinned() ? "yes" : "no", "yes");
+    if (pinBtn)
+        check("切换后按钮取消选中态", !pinBtn->isChecked() ? "yes" : "no", "yes");
+    pw2.setPinned(true);
+    check("切回一直置顶生效", pw2.isPinned() ? "yes" : "no", "yes");
+
     std::printf("pintool: 失败 %d 项\n", bad);
     std::fflush(stdout);
     return bad == 0 ? 0 : 1;

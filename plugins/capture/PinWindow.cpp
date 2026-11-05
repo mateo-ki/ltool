@@ -199,14 +199,31 @@ void PinWindow::resizeEvent(QResizeEvent*)
     placeNav();
 }
 
-// 默认不"永远在最前"：一旦别的程序被激活就让位，新开软件的窗口不会被截图盖住。
-// 点一下截图窗（重新激活）它又回到最前；工具栏 📌 可以强制一直置顶。
+// 默认一直置顶（钉在桌面）：别的程序被激活时，截图窗依然保持浮在最上层，
+// 方便用户对照参考打字。若用户手动切到「自动让位」，才在失焦时让位给普通窗口。
 void PinWindow::changeEvent(QEvent* ev)
 {
     QWidget::changeEvent(ev);
-    if (ev->type() != QEvent::ActivationChange || m_pinned)
+    if (ev->type() != QEvent::ActivationChange)
         return;
-    applyTopmost(isActiveWindow());
+    if (m_pinned)
+        applyTopmost(true);
+    else
+        applyTopmost(isActiveWindow());
+}
+
+void PinWindow::setPinned(bool on)
+{
+    m_pinned = on;
+    if (m_pinBtn) {
+        m_pinBtn->setChecked(m_pinned);
+        m_pinBtn->setAccessibleName(m_pinned ? QStringLiteral("一直置顶")
+                                             : QStringLiteral("自动让位"));
+        m_pinBtn->setToolTip(m_pinned
+                                 ? QStringLiteral("现在：一直置顶，别的程序激活也不让位。点击切换为「自动让位」。")
+                                 : QStringLiteral("现在：自动让位。点击切换为「一直置顶」。"));
+    }
+    applyTopmost(m_pinned || isActiveWindow());
 }
 
 void PinWindow::applyTopmost(bool on)
@@ -1103,22 +1120,18 @@ void PinWindow::buildToolbar()
     lay->addWidget(saveBtn);
     lay->addStretch(1);
     m_pinBtn = new QPushButton(m_toolbar);
-    m_pinBtn->setToolTip("默认：别的程序被激活时，截图窗不再压着它；点一下截图窗又回到最前。\n"
-                         "按这里改成「一直置顶」。");
+    m_pinBtn->setCheckable(true);
+    m_pinBtn->setChecked(m_pinned);
     m_pinBtn->setCursor(Qt::PointingHandCursor);
-    m_pinBtn->setAccessibleName(QStringLiteral("自动让位"));
+    m_pinBtn->setAccessibleName(m_pinned ? QStringLiteral("一直置顶")
+                                         : QStringLiteral("自动让位"));
+    m_pinBtn->setToolTip(m_pinned
+                             ? QStringLiteral("现在：一直置顶，别的程序激活也不让位。点击切换为「自动让位」。")
+                             : QStringLiteral("现在：自动让位。点击切换为「一直置顶」。"));
     m_pinBtn->setIcon(Anno::toolIcon(Anno::Pin));
     m_pinBtn->setFixedWidth(30);
     connect(m_pinBtn, &QPushButton::clicked, this, [this] {
-        m_pinned = !m_pinned;
-        // 图标化之后"现在是哪一种"只能靠选中态（蓝底）+ 可访问名 + 悬停说明来说
-        m_pinBtn->setAccessibleName(m_pinned ? QStringLiteral("一直置顶")
-                                             : QStringLiteral("自动让位"));
-        m_pinBtn->setToolTip(m_pinned
-                                 ? QStringLiteral("现在：一直置顶，别的程序激活也不让位。点一下改回「自动让位」。")
-                                 : QStringLiteral("现在：自动让位。点一下改成「一直置顶」。"));
-        m_pinBtn->setChecked(m_pinned);
-        applyTopmost(true);
+        setPinned(!m_pinned);
     });
     lay->addWidget(m_pinBtn);
     auto* closeBtn = new QPushButton(m_toolbar);
@@ -1154,22 +1167,43 @@ void PinWindow::showContextMenu(const QPoint& globalPos)
     // 好几条 return 分支，手写 delete 迟早漏一条。
     const std::unique_ptr<QMenu> holder(makeStyledMenu());
     QMenu& menu = *holder;
-    // 工具栏收起来的时候，图上右键只留两样：把工具栏叫回来、关掉这张。
-    // 这时候人是要干净地看图，不该再被一排菜单挡一次。
     if (m_barHidden) {
+        QAction* copyAct = menu.addAction(QStringLiteral("复制到剪贴板"));
+        QAction* saveAct = menu.addAction(QStringLiteral("另存为…"));
+        menu.addSeparator();
+        QAction* pinAct = menu.addAction(QStringLiteral("一直置顶"));
+        pinAct->setCheckable(true);
+        pinAct->setChecked(m_pinned);
         QAction* showAct = menu.addAction(QStringLiteral("显示工具栏"));
+        menu.addSeparator();
         QAction* closeOnly = menu.addAction(QStringLiteral("关闭"));
         QAction* got = menu.exec(globalPos);
-        if (got == showAct)
+        if (got == copyAct) {
+            QApplication::clipboard()->setPixmap(m_flat.isNull() ? m_pm : m_flat);
+        } else if (got == saveAct) {
+            const QString def = QString("%1/pin-%2.png")
+                                    .arg(Utils::capturesDir())
+                                    .arg(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"));
+            const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("另存为截图"),
+                                                              def, QStringLiteral("PNG 图片 (*.png)"));
+            if (!path.isEmpty() && (m_flat.isNull() ? m_pm : m_flat).save(path))
+                Platform::reveal(path);
+        } else if (got == pinAct) {
+            setPinned(!m_pinned);
+        } else if (got == showAct) {
             setBarHidden(false);
-        else if (got == closeOnly)
+        } else if (got == closeOnly) {
             close();
+        }
         return;
     }
     QAction* copyAct = menu.addAction(QStringLiteral("复制到剪贴板"));
     QAction* saveAct = menu.addAction(QStringLiteral("另存为…"));
     QAction* ocrAct = menu.addAction(QStringLiteral("识别全文（可编辑/存 txt）"));
     menu.addSeparator();
+    QAction* pinAct = menu.addAction(QStringLiteral("一直置顶"));
+    pinAct->setCheckable(true);
+    pinAct->setChecked(m_pinned);
     QAction* histAct = menu.addAction(m_stripHidden ? QStringLiteral("显示往期截图")
                                                     : QStringLiteral("收起往期截图"));
     QAction* hideBarAct = menu.addAction(QStringLiteral("隐藏工具栏"));
@@ -1178,12 +1212,14 @@ void PinWindow::showContextMenu(const QPoint& globalPos)
     QAction* picked = menu.exec(globalPos);
     if (!picked)
         return;
-    if (picked == histAct) {
+    if (picked == pinAct) {
+        setPinned(!m_pinned);
+    } else if (picked == histAct) {
         setStripHidden(!m_stripHidden);
     } else if (picked == hideBarAct) {
         setBarHidden(true);
     } else if (picked == copyAct) {
-        QApplication::clipboard()->setPixmap(m_pm);
+        QApplication::clipboard()->setPixmap(m_flat.isNull() ? m_pm : m_flat);
     } else if (picked == ocrAct) {
         OcrPanel::extractFrom((m_flat.isNull() ? m_pm : m_flat).toImage(), this);
     } else if (picked == saveAct) {
@@ -1192,7 +1228,7 @@ void PinWindow::showContextMenu(const QPoint& globalPos)
                                 .arg(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"));
         const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("另存为截图"),
                                                           def, QStringLiteral("PNG 图片 (*.png)"));
-        if (!path.isEmpty() && m_pm.save(path))
+        if (!path.isEmpty() && (m_flat.isNull() ? m_pm : m_flat).save(path))
             Platform::reveal(path);
     } else {
         close();
