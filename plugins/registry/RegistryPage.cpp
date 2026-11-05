@@ -124,91 +124,58 @@ RegistryPage::RegistryPage(QWidget* parent) : QWidget(parent)
     lay->setContentsMargins(12, 10, 12, 10);
     lay->setSpacing(8);
 
-    // 顶部 Hero 卡片
-    auto* heroCard = new QFrame(this);
-    heroCard->setObjectName(QStringLiteral("heroCard"));
-    auto* heroLay = new QVBoxLayout(heroCard);
-    heroLay->setContentsMargins(14, 10, 14, 10);
-    heroLay->setSpacing(6);
-
+    // 顶部标题与特性标签
     auto* titleRow = new QHBoxLayout;
     titleRow->setSpacing(8);
 
-    auto* badgeIcon = new QLabel(heroCard);
-    badgeIcon->setFixedSize(22, 22);
-    badgeIcon->setStyleSheet("background:transparent;border:none;");
-    {
-        QPixmap pm(22, 22);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.setBrush(QColor(59, 130, 246, 40));
-        p.setPen(QPen(QColor(59, 130, 246, 160), 1));
-        p.drawRoundedRect(QRectF(1, 1, 20, 20), 5, 5);
-        p.setPen(QColor(59, 130, 246));
-        QFont f = p.font();
-        f.setBold(true);
-        f.setPointSize(9);
-        p.setFont(f);
-        p.drawText(QRect(0, 0, 22, 22), Qt::AlignCenter, QStringLiteral("⊞"));
-        badgeIcon->setPixmap(pm);
-    }
+    auto* title = new QLabel(QStringLiteral("注册表失效残留体检"), this);
+    QFont tf = title->font();
+    tf.setPointSize(11);
+    tf.setBold(true);
+    title->setFont(tf);
 
-    auto* title = new QLabel(QStringLiteral("注册表失效残留体检"), heroCard);
-    title->setStyleSheet("color:#f8fafc;font-size:13.5px;font-weight:700;background:transparent;border:none;");
+    auto* tag1 = new QLabel(QStringLiteral("🛡️ 自动 .reg 备份"), this);
+    tag1->setStyleSheet("color:#0284c7;background:rgba(2,132,199,0.08);border:1px solid rgba(2,132,199,0.22);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500;");
 
-    auto* tag1 = new QLabel(QStringLiteral("🛡️ 自动 .reg 备份"), heroCard);
-    tag1->setStyleSheet("color:#38bdf8;background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.25);border-radius:4px;padding:2px 7px;font-size:10.5px;font-weight:500;");
+    auto* tag2 = new QLabel(QStringLiteral("⚡ 双击即还原"), this);
+    tag2->setStyleSheet("color:#059669;background:rgba(5,150,105,0.08);border:1px solid rgba(5,150,105,0.22);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500;");
 
-    auto* tag2 = new QLabel(QStringLiteral("⚡ 双击即还原"), heroCard);
-    tag2->setStyleSheet("color:#34d399;background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.25);border-radius:4px;padding:2px 7px;font-size:10.5px;font-weight:500;");
+    auto* tag3 = new QLabel(QStringLiteral("🔍 9 类死键排查"), this);
+    tag3->setStyleSheet("color:#7c3aed;background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.22);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500;");
 
-    auto* tag3 = new QLabel(QStringLiteral("🔍 9 类死键排查"), heroCard);
-    tag3->setStyleSheet("color:#a78bfa;background:rgba(167,139,250,0.12);border:1px solid rgba(167,139,250,0.25);border-radius:4px;padding:2px 7px;font-size:10.5px;font-weight:500;");
-
-    titleRow->addWidget(badgeIcon);
     titleRow->addWidget(title);
     titleRow->addWidget(tag1);
     titleRow->addWidget(tag2);
     titleRow->addWidget(tag3);
     titleRow->addStretch(1);
+    lay->addLayout(titleRow);
 
     auto* tip = new QLabel(QStringLiteral(
         "分析注册表里「指向已经不存在的文件 / 盘符」的项，以及 9x 时代留下来的死键："
         "卸载残留、启动项、App Paths、文件关联、COM 组件、服务、死盘符、PATH 失效目录。\n"
         "删除前会把原值导出成 .reg 备份到 backups\\，双击那个文件就能还原。"
-        "PATH 里的某一段这类只给提示，不做整值删除。"), heroCard);
+        "PATH 里的某一段这类只给提示，不做整值删除。"), this);
     tip->setObjectName(QStringLiteral("tip"));
     tip->setWordWrap(true);
-    tip->setStyleSheet("color:#94a3b8;font-size:11.5px;line-height:1.45;background:transparent;border:none;");
-
-    heroLay->addLayout(titleRow);
-    heroLay->addWidget(tip);
-    lay->addWidget(heroCard);
+    lay->addWidget(tip);
 
     // 操作工具栏
     auto* row = new QHBoxLayout;
     row->setSpacing(8);
     m_scanBtn = new QPushButton(QStringLiteral("开始分析"), this);
-    m_scanBtn->setObjectName(QStringLiteral("scanBtn"));
+    m_scanBtn->setObjectName(QStringLiteral("primary"));
     m_scanBtn->setCursor(Qt::PointingHandCursor);
-    m_scanBtn->setMinimumWidth(110);
-    m_scanBtn->setMinimumHeight(30);
 
     m_delBtn = new QPushButton(QStringLiteral("备份并删除所选"), this);
     m_delBtn->setObjectName(QStringLiteral("delBtn"));
     m_delBtn->setCursor(Qt::PointingHandCursor);
     m_delBtn->setEnabled(false);
-    m_delBtn->setMinimumWidth(130);
-    m_delBtn->setMinimumHeight(30);
 
     auto* reportBtn = new QPushButton(QStringLiteral("导出报告"), this);
     reportBtn->setCursor(Qt::PointingHandCursor);
-    reportBtn->setMinimumHeight(30);
 
     auto* backupBtn = new QPushButton(QStringLiteral("打开备份目录"), this);
     backupBtn->setCursor(Qt::PointingHandCursor);
-    backupBtn->setMinimumHeight(30);
 
     row->addWidget(m_scanBtn);
     row->addWidget(m_delBtn);
@@ -218,67 +185,36 @@ RegistryPage::RegistryPage(QWidget* parent) : QWidget(parent)
     lay->addLayout(row);
 
     // 状态统计看板
-    auto* summaryCard = new QFrame(this);
-    summaryCard->setObjectName(QStringLiteral("summaryCard"));
-    auto* sumLay = new QHBoxLayout(summaryCard);
-    sumLay->setContentsMargins(12, 8, 12, 8);
-    sumLay->setSpacing(8);
-
-    auto* sumIcon = new QLabel(QStringLiteral("📊"), summaryCard);
-    sumIcon->setStyleSheet("font-size:13px;background:transparent;border:none;");
-    m_summary = new QLabel(QStringLiteral("还没分析。COM 组件那一类要遍历上万个键，大约 1~3 秒。"), summaryCard);
+    auto* sumRow = new QHBoxLayout;
+    sumRow->setSpacing(6);
+    auto* sumIcon = new QLabel(QStringLiteral("📊"), this);
+    m_summary = new QLabel(QStringLiteral("还没分析。COM 组件那一类要遍历上万个键，大约 1~3 秒。"), this);
     m_summary->setObjectName(QStringLiteral("muted"));
     m_summary->setWordWrap(true);
-    m_summary->setStyleSheet("color:#cbd5e1;font-size:12px;background:transparent;border:none;");
 
-    sumLay->addWidget(sumIcon);
-    sumLay->addWidget(m_summary, 1);
-    lay->addWidget(summaryCard);
+    sumRow->addWidget(sumIcon);
+    sumRow->addWidget(m_summary, 1);
+    lay->addLayout(sumRow);
 
     m_list = new QListWidget(this);
-    m_list->setObjectName(QStringLiteral("regList"));
     lay->addWidget(m_list, 1);
 
-    // 底部详情卡
-    auto* statusCard = new QFrame(this);
-    statusCard->setObjectName(QStringLiteral("statusCard"));
-    auto* statLay = new QVBoxLayout(statusCard);
-    statLay->setContentsMargins(12, 8, 12, 8);
-    statLay->setSpacing(4);
-
-    auto* statTitle = new QLabel(QStringLiteral("📍 注册表项位置详情"), statusCard);
-    statTitle->setStyleSheet("color:#64748b;font-size:10.5px;font-weight:600;letter-spacing:0.5px;background:transparent;border:none;");
-
-    m_status = new QLabel(QStringLiteral("就绪。点击「开始分析」检测系统无效注册表项。"), statusCard);
+    // 底部详情栏
+    auto* statRow = new QHBoxLayout;
+    statRow->setSpacing(6);
+    auto* statIcon = new QLabel(QStringLiteral("📍"), this);
+    m_status = new QLabel(QStringLiteral("就绪。点击「开始分析」检测系统无效注册表项。"), this);
     m_status->setObjectName(QStringLiteral("muted"));
     m_status->setWordWrap(true);
-    m_status->setStyleSheet("color:#94a3b8;font-size:11.5px;background:transparent;border:none;font-family:'Segoe UI','Consolas',monospace;");
 
-    statLay->addWidget(statTitle);
-    statLay->addWidget(m_status);
-    lay->addWidget(statusCard);
+    statRow->addWidget(statIcon);
+    statRow->addWidget(m_status, 1);
+    lay->addLayout(statRow);
 
-    setStyleSheet("QFrame#heroCard{background:#181a22;border:1px solid #282b37;border-radius:8px;}"
-                  "QFrame#summaryCard{background:#15161c;border:1px solid #262934;border-radius:6px;}"
-                  "QFrame#statusCard{background:#15161c;border:1px solid #262934;border-radius:6px;}"
-                  "QListWidget#regList{background:#131419;border:1px solid #262934;border-radius:8px;padding:4px;outline:none;}"
-                  "QListWidget#regList::item{border:none;margin:1px 0;}"
-                  "QListWidget#regList::item:hover{background:#1c1d25;border-radius:6px;}"
-                  "QListWidget#regList::item:selected{background:#20273a;border-radius:6px;}"
-                  "QScrollBar:vertical{background:transparent;width:6px;margin:4px 0;}"
-                  "QScrollBar::handle:vertical{background:#333644;border-radius:3px;min-height:20px;}"
-                  "QScrollBar::handle:vertical:hover{background:#4b5063;}"
-                  "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}"
-                  "QPushButton{background:#22242e;color:#e2e8f0;border:1px solid #333644;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:500;}"
-                  "QPushButton:hover{background:#2b2e3b;border:1px solid #434758;}"
-                  "QPushButton:pressed{background:#1d1e26;}"
-                  "QPushButton#scanBtn{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #2563eb,stop:1 #3b82f6);color:#ffffff;font-weight:600;border:1px solid #3b82f6;}"
-                  "QPushButton#scanBtn:hover{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #3b82f6,stop:1 #60a5fa);border:1px solid #60a5fa;}"
-                  "QPushButton#scanBtn:pressed{background:#1d4ed8;}"
-                  "QPushButton#scanBtn:disabled{background:#262832;color:#64748b;border:1px solid #323542;}"
-                  "QPushButton#delBtn:enabled{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #dc2626,stop:1 #ef4444);color:#ffffff;font-weight:600;border:1px solid #ef4444;}"
-                  "QPushButton#delBtn:enabled:hover{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #ef4444,stop:1 #f87171);border:1px solid #f87171;}"
-                  "QPushButton#delBtn:disabled{background:#22242c;color:#555866;border:1px solid #2e303c;}");
+    setStyleSheet("QPushButton#delBtn:enabled{"
+                  "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #dc2626,stop:1 #ef4444);"
+                  "color:#ffffff;font-weight:600;border:1px solid #ef4444;border-radius:8px;padding:6px 14px;}"
+                  "QPushButton#delBtn:enabled:hover{background:#ef4444;}");
 
     connect(m_scanBtn, &QPushButton::clicked, this, &RegistryPage::startScan);
     connect(m_delBtn, &QPushButton::clicked, this, &RegistryPage::deleteSelected);
@@ -290,12 +226,14 @@ RegistryPage::RegistryPage(QWidget* parent) : QWidget(parent)
         const auto sel = m_list->selectedItems();
         if (sel.isEmpty())
             return;
-        const int idx = sel.first()->data(Qt::UserRole).toInt();
-        if (idx < 0 || idx >= m_issues.size())
-            return;
-        const RegIssue& it = m_issues[idx];
-        m_status->setText(QString("%1\\%2%3").arg(it.hiveName, it.subKey,
-            it.valueName.isEmpty() ? QString() : QString("  @%1").arg(it.valueName)));
+        const int i = sel.first()->data(Qt::UserRole).toInt();
+        if (i >= 0 && i < m_issues.size()) {
+            const RegIssue& it = m_issues[i];
+            m_status->setText(QString("%1\\%2\n%3  值：%4\n%5")
+                                  .arg(it.hiveName, it.subKey, RegClean::categoryLabel(it),
+                                       it.valueName.isEmpty() ? QStringLiteral("（默认）") : it.valueName,
+                                       it.detail));
+        }
     });
 }
 
