@@ -165,6 +165,13 @@ int userPageSelftest()
     // 几何断言：先把版面撑开量一遍，再点"改账户名"的第一下，上面那些一颗都不许挪。
     // 这里只点一下（摆出确认），绝不会点第二下 —— 第二下会真去提权弹 UAC，那不可逆。
     page.resize(560, 320);
+    // 挤压态（这页装不下 320）里所有标签都被压成同一个高度，几何判据就成了空转 ——
+    // 量之前先把版面还给它能显示的那块。这个坑是"把钉子拆掉判据却照样绿"那次照出来的。
+    if (page.layout() && page.layout()->hasHeightForWidth()) {
+        const int needH = page.layout()->totalHeightForWidth(page.width());
+        if (needH > page.height())
+            page.resize(page.width(), needH);
+    }
     page.ensurePolished();
     if (page.layout())
         page.layout()->activate();
@@ -219,8 +226,16 @@ int userPageSelftest()
             page.layout()->activate();
             QCoreApplication::processEvents();
         }
+        // 前后坐标都打出来：这条以前只报 yes/no，CI 红了一次而本机全绿，
+        // 没有数字就看不出"挪走的是哪一行、挪了几像素"，只能再等一轮 50 分钟的流水线。
+        const int yFull2 = yOf("applyFull"), yGap2 = yOf("newName"), yAdmin2 = yOf("newAdmin");
+        QLabel* hint = page.findChild<QLabel*>(QString::fromLatin1("hintText"));
+        std::printf("INFO 武装后：改显示名=%d 新建登录名=%d 管理员那行=%d"
+                    "（增量 %+d/%+d/%+d，说明行高=%d，页面 %dx%d）\n",
+                    yFull2, yGap2, yAdmin2, yFull2 - yFull, yGap2 - yGap, yAdmin2 - yAdmin,
+                    hint ? hint->height() : -1, page.width(), page.height());
         check("第一下不许把上面任何一颗挪走（改显示名/新建/管理员行 y 不变）",
-              (yOf("applyFull") == yFull && yOf("newName") == yGap && yOf("newAdmin") == yAdmin)
+              (yFull2 == yFull && yGap2 == yGap && yAdmin2 == yAdmin)
                   ? QStringLiteral("yes") : QStringLiteral("no"),
               QStringLiteral("yes"));
         // 武装只留一颗：再点另一颗，前一颗必须收回原字
@@ -248,6 +263,48 @@ int userPageSelftest()
                       ? QStringLiteral("yes") : QStringLiteral("no"),
                   QStringLiteral("yes"));
         }
+    }
+    // ---- 说明行那块高度不随文字长短变（上面那条"第一下不许挪走"的根子就在这儿）----
+    // 武装那一句比常驻说明长短不一，而这一行以前把 sizeHint/换行高度交给自己 ——
+    // 于是"多折一行"就把上面每一行都挪走。本机版面宽（摘要不许换行时是 1194）
+    // 怎么都不跨那一行的边界，CI 那台窄（607）正好跨过去：红在流水线、绿在我桌上。
+    // 这两条量的是"决定会不会重排的那个输入"（说明行自己占多高），不是重排的结果。
+    QLabel* probe = page.findChild<QLabel*>(QString::fromLatin1("hintText"));
+    const int probeW = probe ? probe->width() : 0;
+    const QStringList armTexts = page.hintArmTexts();
+    if (probe && probeW > 50 && !armTexts.isEmpty()) {
+        const QString was = probe->text();
+        const auto relayout = [&]() {
+            for (int i = 0; i < 6; ++i) {
+                page.layout()->invalidate();
+                page.layout()->activate();
+                QCoreApplication::processEvents();
+            }
+            return probe->height();
+        };
+        int h0 = -1, sameAll = 1, needMax = 0;
+        for (const QString& t : armTexts) {
+            probe->setText(t);
+            const int h = relayout();
+            needMax = qMax(needMax, probe->heightForWidth(probeW));
+            if (h0 < 0)
+                h0 = h;
+            else if (h != h0)
+                sameAll = 0;
+        }
+        probe->setText(was);
+        relayout();
+        std::printf("INFO 说明行：宽=%d，量了 %d 句（第一下能摆出来的全部），每句都占=%d，最挤那句要=%d\n",
+                    probeW, static_cast<int>(armTexts.size()), h0, needMax);
+        check("说明行的高度对「第一下能摆出的每一句」都一样（武装不许重排版面）",
+              sameAll ? QStringLiteral("yes") : QStringLiteral("no"),
+              QStringLiteral("yes"));
+        check("预留的那块高度装得下其中最挤的一句（不许拿一行糊过去）",
+              h0 >= needMax ? QStringLiteral("yes") : QStringLiteral("no"),
+              QStringLiteral("yes"));
+    } else {
+        std::printf("SKIP 说明行高度那 2 条：标签宽=%d、句子 %d 句（没排开就没得量）\n",
+                    probeW, static_cast<int>(armTexts.size()));
     }
     has("这页已经不再创建任何 QMessageBox（模态框那一类彻底没了）",
         page.findChildren<QMessageBox*>().isEmpty());

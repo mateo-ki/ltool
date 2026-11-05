@@ -316,6 +316,13 @@ QString oneLiner(const UserAccount::Info& i)
         + QStringLiteral(" · SID %1").arg(i.sid.section(QLatin1Char('-'), 0, 4));
 }
 
+// 常驻那一句说明。构造摆它、hintArmTexts 预留高度也算它 —— 一句话只许有一份。
+QString baseHintText()
+{
+    return QStringLiteral("修改显示名只动登录界面/开始菜单名字；修改账户名不动 C:\\Users 目录，"
+                          "注销重登后生效。操作需管理员授权（弹 UAC）。");
+}
+
 } // namespace
 
 UserAccountPage::UserAccountPage(QWidget* parent) : QWidget(parent)
@@ -363,6 +370,10 @@ UserAccountPage::UserAccountPage(QWidget* parent) : QWidget(parent)
     m_state = new QLabel(this);
     m_state->setObjectName(QStringLiteral("accountSummary"));
     m_state->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // 摘要里那一串是**机器相关**的（账户名、计算机名、C:\Users 路径、SID）。
+    // 不许换行时它的 minimumSizeHint 就把整页的最小宽度顶成那个长度 ——
+    // 本机 1194、CI 那台 607，同一个判据两边量的根本不是同一个版面。
+    m_state->setWordWrap(true);
     head->addWidget(m_state, 1);
     auto* reload = new QPushButton(QStringLiteral("重读"), this);
     reload->setObjectName(QStringLiteral("reload"));
@@ -481,8 +492,7 @@ UserAccountPage::UserAccountPage(QWidget* parent) : QWidget(parent)
     m_hint = new QLabel(this);
     m_hint->setObjectName(QStringLiteral("hintText"));
     m_hint->setWordWrap(true);
-    m_hint->setText(QStringLiteral("修改显示名只动登录界面/开始菜单名字；修改账户名不动 C:\\Users 目录，"
-                                  "注销重登后生效。操作需管理员授权（弹 UAC）。"));
+    m_hint->setText(baseHintText());
     hintRow->addWidget(hintIcon);
     hintRow->addWidget(m_hint, 1);
     lay->addLayout(hintRow);
@@ -529,6 +539,7 @@ UserAccountPage::UserAccountPage(QWidget* parent) : QWidget(parent)
     connect(m_applyName, &QPushButton::clicked, this, &UserAccountPage::applyAccountName);
     connect(m_create, &QPushButton::clicked, this, &UserAccountPage::createNewUser);
     connect(reload, &QPushButton::clicked, this, &UserAccountPage::refresh);
+    reserveHintHeight();     // 先按常驻那句钉好高度；读到账户后 applyInfo 会再钉一次
     refresh();
 }
 
@@ -575,6 +586,9 @@ void UserAccountPage::applyInfo(const UserAccount::Info& got)
     // 微软账户在 SAM 里查不到，Rename-LocalUser 对它没意义：那一颗直接不给按，
     // 并在旁边说清去哪儿改（不是把失败藏到按下之后）
     m_applyName->setEnabled(m_info.local);
+    // 风险说明里嵌着真机名/真账户名，长度每台机器不一样 —— 所以读到之后按**真那几句**
+    // 再钉一次。钉子只在"数据到齐"时挪一次，绝不在按下按钮时挪（判据认的是后者）。
+    reserveHintHeight();
 }
 
 // 就地两段确认：第一下把同一颗按钮变成「确认…」并亮 6 秒，第二下才真动手。
@@ -636,9 +650,7 @@ void UserAccountPage::applyFullName()
         refused(QStringLiteral("改显示名"), why);
         return;
     }
-    if (!armOrRun(m_applyFull, QStringLiteral("确认改成这个"),
-                  QStringLiteral("第二下才会提交：只改登录界面/开始菜单显示的名字，"
-                                 "不动账户名，也不动 C:\\Users 目录。要管理员授权。")))
+    if (!armOrRun(m_applyFull, QStringLiteral("确认改成这个"), riskFullText()))
         return;
     QString err;
     const bool ran = UserAccount::runElevatedScript(
@@ -668,10 +680,7 @@ void UserAccountPage::applyAccountName()
         refused(QStringLiteral("改账户名"), why);
         return;
     }
-    if (!armOrRun(m_applyName, QStringLiteral("确认改名"),
-                  QStringLiteral("第二下才会提交：C:\\Users\\%1 那个目录不会跟着改名，写死了旧路径的"
-                                 "程序也不会自己跟上；改完要注销再登录才全面生效。要管理员授权。")
-                      .arg(m_info.name)))
+    if (!armOrRun(m_applyName, QStringLiteral("确认改名"), riskNameText(m_info.name)))
         return;
     QString err;
     const bool ran = UserAccount::runElevatedScript(
@@ -704,13 +713,7 @@ void UserAccountPage::createNewUser()
         return;
     }
     const bool admin = m_newAdmin->isChecked();
-    if (!armOrRun(m_create, QStringLiteral("确认创建"),
-                  QStringLiteral("第二下才会真建：在本机 %1 上建本地账户「%2」%3；"
-                                 "它第一次登录时 Windows 会给它建一个新的 C:\\Users 目录；"
-                                 "密码会临时写进一个脚本文件、跑完立刻删 —— 那一瞬间它是在盘上的。")
-                      .arg(m_info.machine, name,
-                           admin ? QStringLiteral("并加入 Administrators 组（那是完整的管理员权限）")
-                                 : QStringLiteral("（普通用户，不给管理员）"))))
+    if (!armOrRun(m_create, QStringLiteral("确认创建"), riskCreateText(m_info.machine, name, admin)))
         return;
     QString err;
     const bool ran = UserAccount::runElevatedScript(
@@ -725,4 +728,74 @@ void UserAccountPage::createNewUser()
     Utils::log(QStringLiteral("username: 新建用户 %1 admin=%2 ok=%3 err=%4")
                    .arg(name).arg(admin ? 1 : 0).arg(after.exists ? 1 : 0)
                    .arg(ran ? QStringLiteral("ok") : err));
+}
+
+// ---- 说明行那块高度：按「第一下能摆出来的每一句」预留 ----
+// 为什么要在结构上钉死：这一行以前跟着自己那一句的换行长短走。风险说明比常驻那句长，
+// 一多折一行，整页就进入"装不下"的状态，上面每一行（改显示名/新建登录名/管理员）全被重排。
+// 他把"点一下才把版面重排"砍过一次；这条在我这台宽版面上永远差不到那一行，
+// 是 CI 那台窄机器（607）先红出来的。所以判据拿的是同一批句子，不是我另数一份。
+QString UserAccountPage::riskFullText() const
+{
+    return QStringLiteral("第二下才会提交：只改登录界面/开始菜单显示的名字，"
+                          "不动账户名，也不动 C:\Users 目录。要管理员授权。");
+}
+
+QString UserAccountPage::riskNameText(const QString& who) const
+{
+    return QStringLiteral("第二下才会提交：C:\Users\%1 那个目录不会跟着改名，写死了旧路径的"
+                          "程序也不会自己跟上；改完要注销再登录才全面生效。要管理员授权。").arg(who);
+}
+
+QString UserAccountPage::riskCreateText(const QString& machine, const QString& who, bool admin) const
+{
+    return QStringLiteral("第二下才会真建：在本机 %1 上建本地账户「%2」%3；"
+                          "它第一次登录时 Windows 会给它建一个新的 C:\Users 目录；"
+                          "密码会临时写进一个脚本文件、跑完立刻删 —— 那一瞬间它是在盘上的。")
+        .arg(machine, who,
+             admin ? QStringLiteral("并加入 Administrators 组（那是完整的管理员权限）")
+                   : QStringLiteral("（普通用户，不给管理员）"));
+}
+
+QStringList UserAccountPage::hintArmTexts() const
+{
+    // 账户名那一格的上限是 reject() 定的 20 个字（按下之前就先过那一关，所以这是个有界的数）；
+    // 机名那一格同样拿 20 占位（NetBIOS 上限 15）。拿占位而不是真值，是为了"要留几行"
+    // 在每棵机器上都算出同一个数 —— 这台和 CI 那台以前差就差在这儿。
+    const QString probe = QStringLiteral("n").repeated(20);
+    return QStringList{ baseHintText(),
+                        riskFullText(),
+                        riskNameText(probe),
+                        riskCreateText(probe, probe, true),
+                        riskCreateText(probe, probe, false) };
+}
+
+void UserAccountPage::reserveHintHeight()
+{
+    if (!m_hint || m_pinningHint)
+        return;
+    m_pinningHint = true;
+    // 先让版面排开再读宽度：resizeEvent 里那颗标签的几何还是上一轮的，
+    // 拿那个宽度去 heightForWidth 会算出"每行一个字"的假高度（第一次就留过 376px 的空块）。
+    if (layout()) {
+        layout()->invalidate();
+        layout()->activate();
+    }
+    const int w = m_hint->width() > 1 ? m_hint->width() : m_hint->sizeHint().width();
+    const QString shown = m_hint->text();
+    int need = m_hint->sizeHint().height();
+    for (const QString& t : hintArmTexts()) {
+        m_hint->setText(t);
+        need = qMax(need, m_hint->heightForWidth(w));
+    }
+    m_hint->setText(shown);
+    if (m_hint->minimumHeight() != need)
+        m_hint->setFixedHeight(need);
+    m_pinningHint = false;
+}
+
+void UserAccountPage::resizeEvent(QResizeEvent* e)
+{
+    QWidget::resizeEvent(e);
+    reserveHintHeight();
 }

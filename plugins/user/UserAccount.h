@@ -56,6 +56,14 @@ public:
     explicit UserAccountPage(QWidget* parent = nullptr);
     ~UserAccountPage() override;
 
+    // 「第一下能摆出来的每一句说明」：常驻那句 + 三颗按钮各自的风险说明（含管理员那两档）。
+    // 公开是为了自测拿**同一批**句子去量"高度不随文字变" —— 它在页面里另数一份就成了平行实现。
+    // 这颗也是预留高度唯一的来源：页面上任何一句只要在这批里，武装/收回就不许换版面。
+    QStringList hintArmTexts() const;
+
+protected:
+    void resizeEvent(QResizeEvent* e) override;
+
 private:
     void refresh();          // 后台跑 powershell（读一次要半秒多，不能卡在开页面上）
     void applyInfo(const UserAccount::Info& got);
@@ -68,6 +76,14 @@ private:
     bool armOrRun(QPushButton* btn, const QString& confirmText, const QString& risk);
     void disarm();
     void refused(const QString& action, const QStringList& why);
+    // 三句风险说明只写一份：armOrRun 摆出来用它，hintArmTexts 预留高度也用它。
+    // 名字那两格是**参数**：界面拿真那串，预留拿最长的可能值占位（账户名上限 20 是
+    // reject() 定的规矩，按下之前就先过那一关，所以 20 是个有界的数）。
+    QString riskFullText() const;
+    QString riskNameText(const QString& who) const;
+    QString riskCreateText(const QString& machine, const QString& who, bool admin) const;
+    // 把说明行钉成"最挤的那一句"那么高：文字换来换去都不许改这一行占的垂直空间。
+    void reserveHintHeight();
 
     QLabel* m_state = nullptr;
     QLabel* m_hint = nullptr;
@@ -83,6 +99,7 @@ private:
     UserAccount::Info m_info;
     QFutureWatcherBase* m_watcher = nullptr;
     QPushButton* m_armed = nullptr;      // 现在处于"等你第二下"的那颗（最多一颗）
+    bool m_pinningHint = false;          // 预留高度时的闸门：setFixedHeight 会再触发一次 resize
     QString m_armedText;                 // 它原来的文字，收回时换回去
     QTimer* m_armTimer = nullptr;
 };
