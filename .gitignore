@@ -91,6 +91,10 @@ README (1).md
 build/verify/patch_*.py
 build/verify/add_*.py
 build/verify/*.sh
+build/verify/crashscan.ps1
+build/verify/pngcost.ps1
+build/verify/startapps.ps1
 
 __pycache__/
 *.pyc
+.zcode/

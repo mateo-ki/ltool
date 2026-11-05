@@ -15,6 +15,8 @@
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
@@ -23,12 +25,17 @@
 #include <QProgressBar>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QScreen>
 #include <QSettings>
 #include <QThread>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QFutureWatcher>
+
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#endif
 
 #include <atomic>
 #include <functional>
@@ -285,10 +292,37 @@ int showShred(const QString& path)
 // 解压 / 压缩都丢到工作线程，界面上只有一条进度 + 一个"取消"。
 // 进度回调在 worker 线程里被调用，所以只能往 GUI 线程 post 事件，不能直接改控件。
 //
+// 屏幕正中间弹窗基类：在 showEvent 中计算当前鼠标所在屏幕并居中对齐，支持多显示器
+class CenterDialog : public QDialog
+{
+public:
+    using QDialog::QDialog;
+
+protected:
+    void showEvent(QShowEvent* ev) override
+    {
+        QDialog::showEvent(ev);
+        QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
+        if (!screen)
+            screen = QGuiApplication::primaryScreen();
+        if (screen) {
+            const QRect g = screen->availableGeometry();
+            const QRect fg = frameGeometry();
+            move(g.left() + (g.width() - fg.width()) / 2,
+                 g.top() + (g.height() - fg.height()) / 2);
+        }
+#if defined(Q_OS_WIN)
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (hwnd)
+            SetForegroundWindow(hwnd);
+#endif
+    }
+};
+
 // 干活期间窗口不能被关闭：这个对话框是栈对象，工作线程还在引用它的控件。
 // 早先是靠 setWindowFlags 摘掉关闭按钮来挡的，但那句会把已经显示的窗口隐藏掉，
 // exec() 当场返回 —— 进度窗口一闪就没，"完成"两个字用户永远看不见。
-class BusyDialog : public QDialog
+class BusyDialog : public CenterDialog
 {
 public:
     std::shared_ptr<std::atomic<bool>> cancelled;
@@ -376,6 +410,22 @@ int runArchiveTask(const QString& title, const QString& what, const QString& ope
                      QStringLiteral("%2 个文件、%3 → %4")
                          .arg(r.files)
                          .arg(FileOps::human(r.bytes), QDir::toNativeSeparators(r.target)));
+            if (title == QStringLiteral("解压")) {
+                const double secs = qMax<qint64>(1, clock.elapsed()) / 1000.0;
+                cur->setText(QStringLiteral("解压完成：共 %1 个文件、%2（用时 %3 秒）")
+                                 .arg(r.files).arg(FileOps::human(r.bytes))
+                                 .arg(QString::number(secs, 'f', 1)));
+                *shownTarget = r.target;
+                openBtn->setText(QStringLiteral("打开解压位置"));
+                openBtn->setEnabled(true);
+                openBtn->setDefault(true);
+                openBtn->setFocus();
+                cancelBtn->setVisible(false);
+                closeBtn->setEnabled(true);
+                d.raise();
+                d.activateWindow();
+                return;
+            }
             d.accept();
             return;
         }
@@ -396,11 +446,12 @@ int runArchiveTask(const QString& title, const QString& what, const QString& ope
         bar->setRange(0, 0);
         cur->setText(QStringLiteral("正在取消（等当前这个文件写完）…"));
     });
-    QObject::connect(openBtn, &QPushButton::clicked, &d, [shownTarget]() {
+    QObject::connect(openBtn, &QPushButton::clicked, &d, [shownTarget, &d]() {
         const QString& openTarget = *shownTarget;
         const QString target = QFileInfo(openTarget).isDir() ? openTarget
                                                              : QFileInfo(openTarget).absolutePath();
         QDesktopServices::openUrl(QUrl::fromLocalFile(target));
+        d.accept();
     });
     QObject::connect(closeBtn, &QPushButton::clicked, &d, &QDialog::accept);
 
@@ -422,6 +473,14 @@ int runArchiveTask(const QString& title, const QString& what, const QString& ope
         const Archive::Cancel can = [cancelled]() { return cancelled->load(); };
         return task(rep, can);
     }));
+    d.adjustSize();
+    QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    if (screen) {
+        const QRect g = screen->availableGeometry();
+        d.move(g.center().x() - d.width() / 2, g.center().y() - d.height() / 2);
+    }
     return d.exec();
 }
 
@@ -447,6 +506,103 @@ void trayNote(const QString& title, const QString& msg, int msec)
     Utils::trayNote(title, msg, msec);
 }
 
+void showExtractDoneDialog(const QString& target, int files, qint64 bytes, qint64 elapsedMs)
+{
+    CenterDialog dlg;
+    dlg.setWindowTitle(QStringLiteral("解压完成"));
+    dlg.setMinimumWidth(520);
+    dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+
+    auto* lay = new QVBoxLayout(&dlg);
+    lay->setSpacing(14);
+    lay->setContentsMargins(24, 22, 24, 20);
+
+    // 头部行：图标 + 标题 + 统计
+    auto* topRow = new QHBoxLayout;
+    topRow->setSpacing(12);
+    auto* iconLabel = new QLabel(&dlg);
+    const QIcon icon = qApp ? qApp->style()->standardIcon(QStyle::SP_DialogApplyButton) : QIcon();
+    if (!icon.isNull())
+        iconLabel->setPixmap(icon.pixmap(36, 36));
+    topRow->addWidget(iconLabel);
+
+    auto* titleCol = new QVBoxLayout;
+    titleCol->setSpacing(4);
+    auto* titleLabel = new QLabel(QStringLiteral("解压完成"), &dlg);
+    titleLabel->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 600;"));
+
+    const double secs = qMax<qint64>(1, elapsedMs) / 1000.0;
+    auto* infoLabel = new QLabel(QStringLiteral("已成功解压 %1 个文件（%2），用时 %3 秒")
+                                     .arg(files)
+                                     .arg(FileOps::human(bytes))
+                                     .arg(QString::number(secs, 'f', 1)),
+                                 &dlg);
+    infoLabel->setObjectName(QStringLiteral("muted"));
+    titleCol->addWidget(titleLabel);
+    titleCol->addWidget(infoLabel);
+    topRow->addLayout(titleCol);
+    topRow->addStretch(1);
+    lay->addLayout(topRow);
+
+    // 目标路径卡片
+    auto* pathBox = new QFrame(&dlg);
+    pathBox->setFrameShape(QFrame::StyledPanel);
+    pathBox->setStyleSheet(QStringLiteral(
+        "QFrame { background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.15); border-radius: 6px; }"));
+    auto* pathLay = new QVBoxLayout(pathBox);
+    pathLay->setContentsMargins(14, 10, 14, 10);
+    pathLay->setSpacing(4);
+
+    auto* pathTitle = new QLabel(QStringLiteral("解压位置："), pathBox);
+    pathTitle->setObjectName(QStringLiteral("muted"));
+    pathTitle->setStyleSheet(QStringLiteral("font-size: 12px;"));
+    auto* pathVal = new QLabel(QDir::toNativeSeparators(target), pathBox);
+    pathVal->setWordWrap(true);
+    pathVal->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    pathVal->setStyleSheet(QStringLiteral("font-weight: 500; font-size: 13px;"));
+    pathLay->addWidget(pathTitle);
+    pathLay->addWidget(pathVal);
+    lay->addWidget(pathBox);
+
+    // 底部按钮栏
+    auto* btns = new QHBoxLayout;
+    btns->addStretch(1);
+    auto* openBtn = new QPushButton(QStringLiteral("打开解压位置"), &dlg);
+    openBtn->setDefault(true);
+    openBtn->setFocus();
+    openBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { min-height: 28px; padding: 0 16px; font-weight: 600; }"));
+    auto* closeBtn = new QPushButton(QStringLiteral("关闭"), &dlg);
+    closeBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { min-height: 28px; padding: 0 16px; }"));
+    btns->addWidget(openBtn);
+    btns->addWidget(closeBtn);
+    lay->addLayout(btns);
+
+    QObject::connect(openBtn, &QPushButton::clicked, &dlg, [&dlg, target]() {
+        const QString openTarget = QFileInfo(target).isDir() ? target
+                                                             : QFileInfo(target).absolutePath();
+        QDesktopServices::openUrl(QUrl::fromLocalFile(openTarget));
+        dlg.accept();
+    });
+    QObject::connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+
+    dlg.adjustSize();
+    QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    if (screen) {
+        const QRect g = screen->availableGeometry();
+        const QRect fg = dlg.frameGeometry();
+        dlg.move(g.left() + (g.width() - fg.width()) / 2,
+                 g.top() + (g.height() - fg.height()) / 2);
+    }
+
+    dlg.raise();
+    dlg.activateWindow();
+    dlg.exec();
+}
+
 // 不弹框那一种：这个进程本来就是为这一次动作起的，直接在它自己线程里跑完就行。
 // 成功在托盘冒一句（不抢焦点），失败一定要弹框 —— 静默失败会让人以为压缩包已经做好了。
 int runArchiveQuiet(const QString& title, const QString& what,
@@ -466,6 +622,9 @@ int runArchiveQuiet(const QString& title, const QString& what,
              QStringLiteral("%2 个文件、%3 → %4")
                  .arg(r.files)
                  .arg(FileOps::human(r.bytes), QDir::toNativeSeparators(r.target)));
+    if (title == QStringLiteral("解压")) {
+        showExtractDoneDialog(r.target, r.files, r.bytes, t.elapsed());
+    }
     return 0;
 }
 

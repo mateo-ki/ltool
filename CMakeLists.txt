@@ -97,7 +97,9 @@ else()
         src/platform/Autostart_posix.cpp src/platform/FileMeta_posix.cpp
         src/platform/ProcInfo_posix.cpp src/platform/FileOps_posix.cpp
         src/platform/SysConfig_posix.cpp
-        src/platform/AppsFolder_posix.cpp)
+        src/platform/AppsFolder_posix.cpp
+        src/platform/ShellMenu_posix.cpp
+        src/platform/SevenZip_posix.cpp)
 endif()
 
 # ---- 非 Windows：台阶一，只编"量过确实可移植"的那些 TU，然后到此为止 ----

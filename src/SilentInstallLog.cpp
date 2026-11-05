@@ -14,7 +14,6 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
-#include "SettingsDialog.h"
 #include "Theme.h"
 #include "Utils.h"
 
@@ -323,9 +322,8 @@ void SilentInstallLog::showLog(int jobId)
         QWidget* host = nullptr;
         const auto tops = QApplication::topLevelWidgets();
         for (QWidget* w : tops) {
-            auto* sd = qobject_cast<SettingsDialog*>(w);
-            if (sd && sd->isVisible())
-                host = sd;
+            if (w && w->isVisible() && w->inherits("SettingsDialog"))
+                host = w;
         }
         g_win = new SilentInstallLog(host);
     }

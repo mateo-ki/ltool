@@ -3,7 +3,7 @@
 ; 产物: installer\ltool-{#MyAppVersion}-setup.exe（按用户安装到 %LOCALAPPDATA%\Programs\ltool，无需管理员）
 
 #define MyAppName "ltool"
-#define MyAppVersion "1.5.3"
+#define MyAppVersion "1.5.4"
 #define MyAppPublisher "ltool"
 #define MyAppExeName "ltool.exe"
 
