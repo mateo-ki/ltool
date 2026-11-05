@@ -7,6 +7,7 @@
 
 #include <windows.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 
 #include <QApplication>
 #include <QDateTime>
@@ -20,10 +21,14 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QScreen>
 #include <QComboBox>
 #include <QSettings>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -33,6 +38,7 @@ struct WinRow {
     WId hwnd = 0;
     QString title;
     QString exe;
+    QString fullExe;
     int w = 0;
     int h = 0;
 };
@@ -71,8 +77,10 @@ QVector<WinRow> visibleWindows(HWND skip1, HWND skip2)
         if (HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
             WCHAR exe[512] = {};
             DWORD n = 512;
-            if (QueryFullProcessImageNameW(p, 0, exe, &n))
-                r.exe = QFileInfo(QString::fromWCharArray(exe, int(n))).fileName();
+            if (QueryFullProcessImageNameW(p, 0, exe, &n)) {
+                r.fullExe = QString::fromWCharArray(exe, int(n));
+                r.exe = QFileInfo(r.fullExe).fileName();
+            }
             CloseHandle(p);
         }
         c->v->push_back(r);
@@ -80,6 +88,164 @@ QVector<WinRow> visibleWindows(HWND skip1, HWND skip2)
     }, reinterpret_cast<LPARAM>(&ctx));
     return out;
 }
+
+QIcon getMonitorIcon()
+{
+    static QIcon s_icon;
+    if (!s_icon.isNull())
+        return s_icon;
+    QPixmap pm(32, 32);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    // 屏幕外框
+    p.setPen(QPen(QColor(56, 189, 248), 1.6));
+    p.setBrush(QColor(14, 40, 65, 220));
+    p.drawRoundedRect(QRectF(3.5, 4.5, 25, 17), 3, 3);
+    // 荧幕亮斑
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(56, 189, 248, 160));
+    p.drawRoundedRect(QRectF(6, 7, 20, 11), 1.5, 1.5);
+    // 支架底座
+    p.setPen(QPen(QColor(148, 163, 184), 1.6));
+    p.drawLine(QPointF(16, 21.5), QPointF(16, 26.5));
+    p.drawLine(QPointF(11, 26.5), QPointF(21, 26.5));
+    s_icon = QIcon(pm);
+    return s_icon;
+}
+
+QIcon getWindowIcon(HWND hwnd, const QString& fullExe)
+{
+    DWORD_PTR res = 0;
+    if (SendMessageTimeoutW(hwnd, WM_GETICON, ICON_SMALL2, 0, SMTO_ABORTIFHUNG, 30, &res) && res) {
+        QImage img = QImage::fromHICON(reinterpret_cast<HICON>(res));
+        if (!img.isNull())
+            return QIcon(QPixmap::fromImage(img));
+    }
+    if (SendMessageTimeoutW(hwnd, WM_GETICON, ICON_SMALL, 0, SMTO_ABORTIFHUNG, 30, &res) && res) {
+        QImage img = QImage::fromHICON(reinterpret_cast<HICON>(res));
+        if (!img.isNull())
+            return QIcon(QPixmap::fromImage(img));
+    }
+    HICON hIcon = reinterpret_cast<HICON>(GetClassLongPtrW(hwnd, GCLP_HICONSM));
+    if (!hIcon)
+        hIcon = reinterpret_cast<HICON>(GetClassLongPtrW(hwnd, GCLP_HICON));
+    if (hIcon) {
+        QImage img = QImage::fromHICON(hIcon);
+        if (!img.isNull())
+            return QIcon(QPixmap::fromImage(img));
+    }
+    if (!fullExe.isEmpty()) {
+        HICON hLarge = nullptr, hSmall = nullptr;
+        if (ExtractIconExW((LPCWSTR)fullExe.utf16(), 0, &hLarge, &hSmall, 1) > 0) {
+            HICON chosen = hSmall ? hSmall : hLarge;
+            QImage img = QImage::fromHICON(chosen);
+            if (hLarge) DestroyIcon(hLarge);
+            if (hSmall && hSmall != hLarge) DestroyIcon(hSmall);
+            if (!img.isNull())
+                return QIcon(QPixmap::fromImage(img));
+        }
+    }
+    static QIcon s_fallback;
+    if (s_fallback.isNull()) {
+        QPixmap pm(32, 32);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(QColor(100, 116, 139), 1.5));
+        p.setBrush(QColor(30, 41, 59, 200));
+        p.drawRoundedRect(QRectF(3.5, 3.5, 25, 25), 4, 4);
+        p.setPen(QPen(QColor(148, 163, 184), 1.2));
+        p.drawLine(QPointF(3.5, 10.5), QPointF(28.5, 10.5));
+        s_fallback = QIcon(pm);
+    }
+    return s_fallback;
+}
+
+class WindowItemDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex&) const override
+    {
+        return QSize(option.rect.width(), 46);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
+    {
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+
+        const QRect r = option.rect.adjusted(2, 2, -2, -2);
+        const bool selected = (option.state & QStyle::State_Selected);
+        const bool hover = (option.state & QStyle::State_MouseOver);
+
+        if (selected) {
+            painter->setPen(QPen(QColor(59, 130, 246, 220), 1.0));
+            painter->setBrush(QColor(33, 44, 72));
+            painter->drawRoundedRect(r, 6, 6);
+            // 选中左边竖条指示线
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(59, 130, 246));
+            painter->drawRoundedRect(QRectF(r.left() + 2.5, r.top() + 9, 3, r.height() - 18), 1.5, 1.5);
+        } else if (hover) {
+            painter->setPen(QPen(QColor(55, 58, 70), 1.0));
+            painter->setBrush(QColor(32, 34, 42));
+            painter->drawRoundedRect(r, 6, 6);
+        } else {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(22, 23, 28));
+            painter->drawRoundedRect(r, 6, 6);
+        }
+
+        // 图标
+        const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+        const int iconSize = 26;
+        const QRect iconRect(r.left() + (selected ? 10 : 8), r.top() + (r.height() - iconSize) / 2, iconSize, iconSize);
+        if (!icon.isNull()) {
+            icon.paint(painter, iconRect, Qt::AlignCenter);
+        }
+
+        // 文本
+        const QString rawTitle = index.data(Qt::UserRole + 1).toString();
+        const bool isMonitor = index.data(Qt::UserRole + 2).toBool();
+        const QString exe = index.data(Qt::UserRole + 3).toString();
+        const QString res = index.data(Qt::UserRole + 4).toString();
+
+        const int textX = iconRect.right() + 8;
+        const int textW = r.right() - textX - 8;
+
+        // 第一行：标题
+        QFont titleFont = painter->font();
+        titleFont.setPointSize(9);
+        titleFont.setBold(true);
+        painter->setFont(titleFont);
+        painter->setPen(selected ? QColor(255, 255, 255) : QColor(235, 238, 245));
+
+        QFontMetrics fm(titleFont);
+        const QString titleStr = rawTitle.isEmpty() ? index.data(Qt::DisplayRole).toString() : rawTitle;
+        const QString elidedTitle = fm.elidedText(titleStr, Qt::ElideRight, textW);
+        painter->drawText(QRect(textX, r.top() + 5, textW, 17), Qt::AlignLeft | Qt::AlignVCenter, elidedTitle);
+
+        // 第二行：子标题（exe / 屏幕 + 分辨率）
+        QFont subFont = painter->font();
+        subFont.setPointSize(8);
+        subFont.setBold(false);
+        painter->setFont(subFont);
+
+        QString subText;
+        if (isMonitor) {
+            subText = QStringLiteral("主显示器 · 物理屏幕 · %1").arg(res.isEmpty() ? QStringLiteral("整块屏幕") : res);
+            painter->setPen(selected ? QColor(147, 197, 253) : QColor(56, 189, 248));
+        } else {
+            subText = QStringLiteral("%1 · %2").arg(exe.isEmpty() ? QStringLiteral("应用程序") : exe, res);
+            painter->setPen(selected ? QColor(190, 200, 220) : QColor(130, 138, 150));
+        }
+        painter->drawText(QRect(textX, r.top() + 23, textW, 16), Qt::AlignLeft | Qt::AlignVCenter, subText);
+
+        painter->restore();
+    }
+};
 
 Recorder* g_rec = nullptr;
 RecordBar* g_bar = nullptr;
@@ -220,35 +386,67 @@ WindowPicker::WindowPicker(QWidget* parent)
     : QWidget(parent, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint)
 {
     setAttribute(Qt::WA_DeleteOnClose, false);
+    setAttribute(Qt::WA_TranslucentBackground, true);
     auto* lay = new QVBoxLayout(this);
     lay->setContentsMargins(10, 8, 10, 8);
-    lay->setSpacing(6);
+    lay->setSpacing(7);
+
     auto* head = new QHBoxLayout;
     head->setSpacing(6);
+
+    // 录屏指示徽章
+    auto* badge = new QLabel(this);
+    badge->setFixedSize(20, 20);
+    badge->setStyleSheet("background:transparent;border:none;");
+    {
+        QPixmap pm(20, 20);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setBrush(QColor(239, 68, 68, 40));
+        p.setPen(QPen(QColor(239, 68, 68, 140), 1));
+        p.drawRoundedRect(QRectF(1, 1, 18, 18), 4, 4);
+        p.setBrush(QColor(239, 68, 68));
+        p.setPen(Qt::NoPen);
+        p.drawEllipse(QRectF(6, 6, 8, 8));
+        badge->setPixmap(pm);
+    }
+
     auto* title = new QLabel(QStringLiteral("录什么？（整块屏幕 / 某一个窗口）"), this);
-    title->setStyleSheet("color:#e8ebf2;font-size:13px;font-weight:600;");
+    title->setStyleSheet("color:#f3f4f6;font-size:13px;font-weight:600;background:transparent;border:none;");
     // 这窗没标题栏，"按住哪儿能挪"得写在人眼看得见的地方
-    title->setToolTip(QStringLiteral("按住这一行（或标题旁边的空白处）可以拖动这个窗"));
+    title->setToolTip(QStringLiteral("按住标题栏（或空白处）可以拖动这个窗口 · Esc 或点空白处取消"));
+
+    auto* f2Tag = new QLabel(QStringLiteral("F2"), this);
+    f2Tag->setStyleSheet("color:#94a3b8;font-size:10px;font-weight:600;background:#242630;border:1px solid #363946;border-radius:4px;padding:1px 5px;");
+
     // 这窗没标题栏，光靠 Esc / 点到别处 / 再按一次 F2 还是得有个人眼的落点
     m_close = new QPushButton(QStringLiteral("✕"), this);
     m_close->setObjectName(QStringLiteral("close"));
     m_close->setFixedSize(24, 22);
     m_close->setCursor(Qt::PointingHandCursor);
     m_close->setToolTip(QStringLiteral("不录了（同 Esc）"));
+
+    head->addWidget(badge);
     head->addWidget(title);
+    head->addWidget(f2Tag);
     head->addStretch(1);
     head->addWidget(m_close);
+
     auto* filter = new QLineEdit(this);
-    filter->setPlaceholderText(QStringLiteral("输入关键字过滤（输「屏」就剩整块屏幕）；"
-                                              "点一条只是选中并出预览，按「开始录制」或回车才开录，Esc 取消"));
+    filter->setPlaceholderText(QStringLiteral("输入关键字过滤（输「屏」筛选屏幕，输应用名过滤窗口）… 点一条选中预览，按「开始录制」开录，Esc 取消"));
     auto* list = new QListWidget(this);
+    list->setItemDelegate(new WindowItemDelegate(this));
     list->setSelectionMode(QAbstractItemView::SingleSelection);
+
     // 画质 / 画面大小：录之前顺手能改的两件事，改一下就记住（config.ini），下次按 F2 还是这个。
     // 挂在列表下面一行，上面各行的高度都不动 —— 这个窗每次 F2 都重建，排布必须稳定。
     auto* opts = new QHBoxLayout;
     opts->setSpacing(6);
     auto* qCap = new QLabel(QStringLiteral("画质"), this);
+    qCap->setStyleSheet("color:#94a3b8;font-size:12px;font-weight:600;background:transparent;border:none;");
     auto* wCap = new QLabel(QStringLiteral("画面"), this);
+    wCap->setStyleSheet("color:#94a3b8;font-size:12px;font-weight:600;background:transparent;border:none;");
     auto* quality = new QComboBox(this);
     quality->setObjectName(QStringLiteral("recQuality"));
     for (const QualityPreset& q : kQualities)
@@ -278,7 +476,7 @@ WindowPicker::WindowPicker(QWidget* parent)
     m_rec = new QPushButton(QStringLiteral("开始录制"), this);
     m_rec->setObjectName(QStringLiteral("recStart"));
     m_rec->setCursor(Qt::PointingHandCursor);
-    m_rec->setMinimumWidth(120);
+    m_rec->setMinimumWidth(130);
     m_rec->setToolTip(QStringLiteral("录当前选中那一条（同回车）"));
     auto* bottom = new QHBoxLayout;
     bottom->setSpacing(6);
@@ -288,27 +486,34 @@ WindowPicker::WindowPicker(QWidget* parent)
     bottom->addStretch(1);
     // 右边垫一块和左边那组一样宽的空白：这样按钮落在**整个窗的中线上**，
     // 而不是"剩下那点空间的中间"（那样它永远偏右）。
-    auto* pad = new QWidget;
+    auto* pad = new QWidget(this);
+    pad->setStyleSheet("background:transparent;border:none;");
     pad->setFixedWidth(opts->sizeHint().width());
     bottom->addWidget(pad);
 
     // 右边那一块实时预览：拿的就是 Recorder 同一一路（WGC），并且按当前「画面」档
     // 缩到编码尺寸 —— 这块小图就是将要进 mp4 的那一张，不是另画一份示意图。
     m_pv = new WindowPreview(this);
-    m_shot = new QLabel(QStringLiteral("没选东西"), this);
+    m_shot = new QLabel(QStringLiteral("📷 尚未选择目标"), this);
     m_shot->setObjectName(QStringLiteral("preview"));
     m_shot->setAlignment(Qt::AlignCenter);
-    m_shot->setMinimumSize(260, 196);
+    m_shot->setMinimumSize(270, 200);
     m_shot->setScaledContents(false);
-    m_cap = new QLabel(QStringLiteral("选中一条就能看到录进去的画面"), this);
+    m_cap = new QLabel(QStringLiteral("选中条目即可在此查看录制画面实时取景"), this);
     m_cap->setObjectName(QStringLiteral("previewCap"));
+    m_cap->setAlignment(Qt::AlignCenter);
     m_cap->setWordWrap(true);
+
+    auto* pvTitle = new QLabel(QStringLiteral("实时取景 · LIVE PREVIEW"), this);
+    pvTitle->setStyleSheet("color:#64748b;font-size:10px;font-weight:600;letter-spacing:1px;background:transparent;border:none;");
+
     auto* right = new QVBoxLayout;
-    right->setSpacing(4);
+    right->setSpacing(5);
+    right->addWidget(pvTitle);
     right->addWidget(m_shot, 1);
     right->addWidget(m_cap);
     auto* mid = new QHBoxLayout;
-    mid->setSpacing(8);
+    mid->setSpacing(10);
     mid->addWidget(list, 5);
     mid->addLayout(right, 4);
 
@@ -318,25 +523,45 @@ WindowPicker::WindowPicker(QWidget* parent)
     lay->addLayout(bottom);
     list->setObjectName(QStringLiteral("list"));
     filter->setObjectName(QStringLiteral("filter"));
-    setStyleSheet("QWidget{background:#26272c;border:1px solid #3a3c45;}"
-                  "QLineEdit,QListWidget{background:#1b1c20;color:#e8ebf2;border:1px solid #3a3c45;"
-                  "border-radius:5px;padding:4px 6px;}"
-                  "QListWidget::item{padding:5px 6px;border-radius:4px;}"
-                  "QListWidget::item:selected{background:#3f6ae0;}"
+
+    setStyleSheet("WindowPicker{background:transparent;}"
+                  "QLineEdit#filter{background:#14151a;color:#f1f5f9;border:1px solid #2a2c36;"
+                  "border-radius:6px;padding:6px 10px;font-size:12px;}"
+                  "QLineEdit#filter:hover{border:1px solid #373a48;}"
+                  "QLineEdit#filter:focus{background:#181920;border:1px solid #3b82f6;}"
+                  "QListWidget#list{background:#14151a;border:1px solid #2a2c36;"
+                  "border-radius:8px;padding:4px;outline:none;}"
+                  "QListWidget#list::item{border:none;padding:0px;}"
+                  "QScrollBar:vertical{background:transparent;width:6px;margin:4px 0;}"
+                  "QScrollBar::handle:vertical{background:#333644;border-radius:3px;min-height:20px;}"
+                  "QScrollBar::handle:vertical:hover{background:#4b5063;}"
+                  "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}"
                   "QPushButton{background:#3a3d46;color:#e8ebf2;border:none;border-radius:4px;}"
                   "QPushButton:hover{background:#e04a4a;}"
-                  "QLabel{border:none;}"
-                  "QComboBox{background:#1b1c20;color:#e8ebf2;border:1px solid #3a3c45;"
-                  "border-radius:5px;padding:3px 6px;}"
-                  "QComboBox QAbstractItemView{background:#1b1c20;color:#e8ebf2;"
-                  "border:1px solid #3a3c45;selection-background-color:#3f6ae0;}"
-                  "QLabel#preview{background:#101114;color:#8b93a1;border:1px solid #3a3c45;"
-                  "border-radius:6px;}"
-                  "QLabel#previewCap{background:transparent;border:none;color:#8b93a1;font-size:8.5pt;}"
-                  "QPushButton#recStart{background:#3f6ae0;color:#ffffff;font-weight:600;"
-                  "border:none;border-radius:5px;padding:6px 18px;}"
-                  "QPushButton#recStart:hover{background:#5a82f0;}"
-                  "QPushButton#recStart:disabled{background:#3a3d46;color:#8b93a1;}");
+                  "QPushButton#close{background:rgba(255,255,255,0.06);color:#94a3b8;"
+                  "border:1px solid rgba(255,255,255,0.08);border-radius:11px;font-size:11px;font-weight:bold;}"
+                  "QPushButton#close:hover{background:#ef4444;color:#ffffff;border:1px solid #ef4444;}"
+                  "QPushButton#close:pressed{background:#dc2626;}"
+                  "QComboBox{background:#1b1c22;color:#f1f5f9;border:1px solid #2e313d;"
+                  "border-radius:6px;padding:4px 22px 4px 10px;font-size:12px;min-height:22px;}"
+                  "QComboBox:hover{background:#22242c;border:1px solid #3e4252;}"
+                  "QComboBox:focus{border:1px solid #3b82f6;}"
+                  "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:top right;width:18px;border:none;}"
+                  "QComboBox::down-arrow{image:none;border-left:4px solid transparent;border-right:4px solid transparent;"
+                  "border-top:5px solid #94a3b8;margin-right:6px;}"
+                  "QComboBox QAbstractItemView{background:#1b1c22;color:#f1f5f9;border:1px solid #323544;"
+                  "border-radius:6px;padding:4px;selection-background-color:#3b82f6;selection-color:#ffffff;outline:none;}"
+                  "QComboBox QAbstractItemView::item{padding:5px 8px;border-radius:4px;}"
+                  "QLabel#preview{background:#0f1013;color:#64748b;border:1px solid #282a33;"
+                  "border-radius:8px;font-size:12px;}"
+                  "QLabel#previewCap{background:#17181e;border:1px solid #282a33;border-radius:6px;"
+                  "color:#94a3b8;font-size:11px;padding:6px 8px;}"
+                  "QPushButton#recStart{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #2563eb,stop:1 #3b82f6);"
+                  "color:#ffffff;font-size:13px;font-weight:600;border:1px solid #3b82f6;border-radius:6px;padding:6px 22px;}"
+                  "QPushButton#recStart:hover{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #3b82f6,stop:1 #60a5fa);"
+                  "border:1px solid #60a5fa;}"
+                  "QPushButton#recStart:pressed{background:#1d4ed8;}"
+                  "QPushButton#recStart:disabled{background:#262830;color:#64748b;border:1px solid #323540;}");
     connect(m_close, &QPushButton::clicked, this, &QWidget::hide);
     const auto saveOpts = [quality, width] {
         QSettings st(Utils::dataDir() + "/config.ini", QSettings::IniFormat);
@@ -357,7 +582,7 @@ WindowPicker::WindowPicker(QWidget* parent)
         m_pv->setMaxWidth(recMaxWidth());
         refreshPreview();     // 那行字要跟着换（"编码后 1280x720"），图下一帧自己会来
     });
-    resize(760, 430);
+    resize(760, 440);
 
     const auto rebuild = [this, list, filter] {
         list->clear();
@@ -370,6 +595,9 @@ WindowPicker::WindowPicker(QWidget* parent)
             it->setData(Qt::UserRole, qlonglong(scr.mon));
             it->setData(Qt::UserRole + 1, QStringLiteral("整个屏幕"));
             it->setData(Qt::UserRole + 2, true);
+            it->setData(Qt::UserRole + 3, QStringLiteral("主显示器"));
+            it->setData(Qt::UserRole + 4, QStringLiteral("%1 × %2").arg(scr.w).arg(scr.h));
+            it->setIcon(getMonitorIcon());
         }
         const HWND skip = reinterpret_cast<HWND>(winId());
         for (const WinRow& r : visibleWindows(skip, g_bar ? reinterpret_cast<HWND>(g_bar->winId()) : nullptr)) {
@@ -377,6 +605,10 @@ WindowPicker::WindowPicker(QWidget* parent)
                                                .arg(r.title.left(46), r.exe).arg(r.w).arg(r.h), list);
             it->setData(Qt::UserRole, qlonglong(r.hwnd));
             it->setData(Qt::UserRole + 1, r.title);
+            it->setData(Qt::UserRole + 2, false);
+            it->setData(Qt::UserRole + 3, r.exe);
+            it->setData(Qt::UserRole + 4, QStringLiteral("%1 × %2").arg(r.w).arg(r.h));
+            it->setIcon(getWindowIcon(reinterpret_cast<HWND>(r.hwnd), r.fullExe));
         }
         if (list->count())
             list->setCurrentRow(0);
@@ -473,8 +705,8 @@ void WindowPicker::refreshPreview()
     if (!isVisible() || !it || it->isHidden()) {
         m_pv->stop();
         m_shot->clear();
-        m_shot->setText(it ? QStringLiteral("这条看不见") : QStringLiteral("没选东西"));
-        m_cap->setText(QStringLiteral("选中一条就能看到录进去的画面"));
+        m_shot->setText(it ? QStringLiteral("该窗口当前不可见") : QStringLiteral("📷 尚未选择目标"));
+        m_cap->setText(QStringLiteral("选中条目即可在此查看录制画面实时取景"));
         return;
     }
     m_pv->setMaxWidth(recMaxWidth());
@@ -482,11 +714,11 @@ void WindowPicker::refreshPreview()
     if (!m_pv->begin(WId(it->data(Qt::UserRole).toLongLong()),
                      it->data(Qt::UserRole + 2).toBool(), &err)) {
         m_shot->clear();
-        m_shot->setText(QStringLiteral("开不起预览"));
+        m_shot->setText(QStringLiteral("⚠️ 无法获取预览画面"));
         m_cap->setText(err);
     } else {
         m_shot->clear();
-        m_shot->setText(QStringLiteral("等第一帧…"));
+        m_shot->setText(QStringLiteral("正在捕获第一帧…"));
         m_cap->setText(QStringLiteral("编码后 %1")
                            .arg(m_pv->shownSize().isValid() && m_pv->shownSize().width()
                                     ? QStringLiteral("%1x%2")
@@ -529,6 +761,18 @@ void WindowPicker::hideEvent(QHideEvent* e)
     QWidget::hideEvent(e);
 }
 
+void WindowPicker::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF r = rect().adjusted(0.5, 0.5, -0.5, -0.5);
+    QPainterPath path;
+    path.addRoundedRect(r, 12, 12);
+    p.fillPath(path, QColor(24, 25, 31, 250));
+    p.setPen(QPen(QColor(255, 255, 255, 28), 1.0));
+    p.drawPath(path);
+}
+
 // ---------------- 悬浮条 ----------------
 
 RecordBar::RecordBar(Recorder* rec, const QString& path, QWidget* parent)
@@ -537,11 +781,13 @@ RecordBar::RecordBar(Recorder* rec, const QString& path, QWidget* parent)
 {
     // 别抢前台：他正要点的是被录的那个窗口
     setAttribute(Qt::WA_ShowWithoutActivating);
+    setAttribute(Qt::WA_TranslucentBackground, true);
     auto* lay = new QHBoxLayout(this);
-    lay->setContentsMargins(10, 4, 8, 4);
+    lay->setContentsMargins(14, 4, 10, 4);
     lay->setSpacing(8);
     auto* dot = new QLabel(QStringLiteral("●"), this);
-    dot->setStyleSheet("color:#e04a4a;border:none;font-size:13px;");
+    dot->setObjectName(QStringLiteral("recDot"));
+    dot->setStyleSheet("color:#ef4444;border:none;background:transparent;font-size:12px;");
     m_text = new QLabel(QStringLiteral("正在录…"), this);
     m_text->setObjectName(QStringLiteral("text"));
     m_stop = new QPushButton(QStringLiteral("停止"), this);
@@ -556,14 +802,26 @@ RecordBar::RecordBar(Recorder* rec, const QString& path, QWidget* parent)
     lay->addStretch(1);
     lay->addWidget(m_cancel);
     lay->addWidget(m_stop);
-    setStyleSheet("QWidget{background:#26272c;border:1px solid #4a4d57;border-radius:8px;}"
-                  "QLabel{color:#e8ebf2;border:none;font-size:12px;}"
-                  "QPushButton{background:#3a3d46;color:#e8ebf2;border:none;border-radius:5px;"
-                  "padding:3px 10px;}"
-                  "QPushButton:hover{background:#4a4f5c;}");
-    setAttribute(Qt::WA_TranslucentBackground, false);
-    adjustSize();
-    setFixedWidth(320);
+    setStyleSheet("RecordBar{background:transparent;}"
+                  "QLabel#recDot{background:transparent;border:none;color:#ef4444;font-size:12px;}"
+                  "QLabel#text{color:#f1f5f9;background:transparent;border:none;font-size:12px;font-weight:600;"
+                  "font-family:'Segoe UI','Consolas',monospace;}"
+                  "QPushButton#cancel{background:rgba(255,255,255,0.08);color:#94a3b8;"
+                  "border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:3px 10px;"
+                  "font-size:11px;font-weight:500;}"
+                  "QPushButton#cancel:hover{background:rgba(239,68,68,0.22);color:#fca5a5;"
+                  "border:1px solid rgba(239,68,68,0.4);}"
+                  "QPushButton#cancel:pressed{background:rgba(239,68,68,0.35);}"
+                  "QPushButton#cancel:disabled{background:rgba(255,255,255,0.03);color:#475569;border:none;}"
+                  "QPushButton#stop{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #ef4444,stop:1 #dc2626);"
+                  "color:#ffffff;border:1px solid #ef4444;border-radius:12px;padding:3px 14px;"
+                  "font-size:11px;font-weight:600;}"
+                  "QPushButton#stop:hover{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #f87171,stop:1 #ef4444);"
+                  "border:1px solid #f87171;}"
+                  "QPushButton#stop:pressed{background:#b91c1c;}"
+                  "QPushButton#stop:disabled{background:#334155;color:#94a3b8;border:1px solid #475569;}");
+    setFixedWidth(330);
+    setFixedHeight(36);
 
     const QRect a = screen()->availableGeometry();
     move(a.right() - width() - 16, a.bottom() - height() - 12);
@@ -616,12 +874,18 @@ void RecordBar::finish(const QString& error)
         QFile::remove(m_path);
         m_text->setText(QStringLiteral("已取消，没保存（丢掉 %1 帧）").arg(m_rec->framesCaptured()));
         m_stop->setText(QStringLiteral("关闭"));
+        m_stop->setStyleSheet("QPushButton#stop{background:rgba(255,255,255,0.1);color:#e2e8f0;border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:3px 14px;font-size:11px;font-weight:600;} QPushButton#stop:hover{background:rgba(255,255,255,0.18);}");
         m_cancel->setVisible(false);
         Utils::log(QString("record cancelled: %1 frames=%2 文件已删")
                        .arg(m_path).arg(m_rec->framesCaptured()));
         m_stop->setEnabled(true);
         disconnect(m_stop, nullptr, this, nullptr);
         connect(m_stop, &QPushButton::clicked, this, [this] { close(); });
+        adjustSize();
+        setFixedWidth(qMax(340, width() + 20));
+        const QRect a = screen()->availableGeometry();
+        move(qMax(a.left() + 10, a.right() - width() - 16),
+             qMax(a.top() + 10, a.bottom() - height() - 12));
         auto* t = new QTimer(this);
         connect(t, &QTimer::timeout, this, &QWidget::close);
         t->setSingleShot(true);
@@ -631,6 +895,7 @@ void RecordBar::finish(const QString& error)
     if (!error.isEmpty()) {
         m_text->setText(QStringLiteral("没录成：%1").arg(error));
         m_stop->setText(QStringLiteral("知道了"));
+        m_stop->setStyleSheet("QPushButton#stop{background:#dc2626;color:#ffffff;border:none;border-radius:12px;padding:3px 14px;font-size:11px;font-weight:600;} QPushButton#stop:hover{background:#ef4444;}");
         Utils::log(QString("record failed: %1 path=%2").arg(error, m_path));
     } else {
         const qint64 bytes = m_rec->fileBytes();
@@ -642,6 +907,7 @@ void RecordBar::finish(const QString& error)
                             .arg(m_rec->framesCaptured())
                             .arg(size, QFileInfo(m_path).fileName()));
         m_stop->setText(QStringLiteral("打开所在目录"));
+        m_stop->setStyleSheet("QPushButton#stop{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #2563eb,stop:1 #3b82f6);color:#ffffff;border:1px solid #3b82f6;border-radius:12px;padding:3px 14px;font-size:11px;font-weight:600;} QPushButton#stop:hover{background:#3b82f6;}");
         Utils::log(QString("record saved: %1 frames=%2 bytes=%3")
                        .arg(m_path).arg(m_rec->framesCaptured()).arg(bytes));
     }
@@ -652,10 +918,27 @@ void RecordBar::finish(const QString& error)
             Platform::reveal(m_path);
         close();
     });
+    adjustSize();
+    setFixedWidth(qMax(360, width() + 20));
+    const QRect a = screen()->availableGeometry();
+    move(qMax(a.left() + 10, a.right() - width() - 16),
+         qMax(a.top() + 10, a.bottom() - height() - 12));
     auto* t = new QTimer(this);
     connect(t, &QTimer::timeout, this, &QWidget::close);
     t->setSingleShot(true);
     t->start(error.isEmpty() ? 30000 : 12000);   // 结果留在条上，不用弹窗打断
+}
+
+void RecordBar::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF r = rect().adjusted(0.5, 0.5, -0.5, -0.5);
+    QPainterPath path;
+    path.addRoundedRect(r, 18, 18);
+    p.fillPath(path, QColor(18, 19, 25, 240));
+    p.setPen(QPen(QColor(255, 255, 255, 36), 1.0));
+    p.drawPath(path);
 }
 
 void RecordBar::mousePressEvent(QMouseEvent* e)

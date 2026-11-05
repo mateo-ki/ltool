@@ -55,6 +55,7 @@ protected:
     // 收起来就把取帧那一路放掉：压在别人窗口上面的实时抓取不能空转
     void hideEvent(QHideEvent*) override;
     void showEvent(QShowEvent*) override;
+    void paintEvent(QPaintEvent*) override;
 
 private:
     void refreshPreview();            // 按当前选中那条 + 当前「画面」档重开预览
@@ -79,6 +80,7 @@ protected:
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
+    void paintEvent(QPaintEvent*) override;
 
 private:
     void poll();
