@@ -301,17 +301,17 @@ ToolsPage::ToolsPage(QWidget* parent)
     m_back->setVisible(false);
     m_heading = new QLabel(QStringLiteral("插件商店"), this);
     m_heading->setObjectName(QStringLiteral("pageTitle"));
-    auto* refresh = new QPushButton(QStringLiteral("刷新清单"), this);
-    refresh->setObjectName(QStringLiteral("storeRefresh"));
-    refresh->setCursor(Qt::PointingHandCursor);
-    refresh->setToolTip(QStringLiteral("拉商店那份 plugins-index.json。\n"
-                                      "内置地址是**和这版 ltool 同一次构建发出去的那一份**（GitHub Release 资产），"
-                                      "地址在配置页「插件清单地址」那一行，代理沿用「下载代理」那一行。"));
-    auto* repoBtn = new QPushButton(QStringLiteral("插件仓库"), this);
-    repoBtn->setObjectName(QStringLiteral("storeRepo"));
-    repoBtn->setCursor(Qt::PointingHandCursor);
-    repoBtn->setToolTip(QStringLiteral("前往 ltool_plugin GitHub 插件仓库网页"));
-    connect(repoBtn, &QPushButton::clicked, this, [] {
+    m_refreshBtn = new QPushButton(QStringLiteral("刷新清单"), this);
+    m_refreshBtn->setObjectName(QStringLiteral("storeRefresh"));
+    m_refreshBtn->setCursor(Qt::PointingHandCursor);
+    m_refreshBtn->setToolTip(QStringLiteral("拉商店那份 plugins-index.json。\n"
+                                           "内置地址是**和这版 ltool 同一次构建发出去的那一份**（GitHub Release 资产），"
+                                           "地址在配置页「插件清单地址」那一行，代理沿用「下载代理」那一行。"));
+    m_repoBtn = new QPushButton(QStringLiteral("插件仓库"), this);
+    m_repoBtn->setObjectName(QStringLiteral("storeRepo"));
+    m_repoBtn->setCursor(Qt::PointingHandCursor);
+    m_repoBtn->setToolTip(QStringLiteral("前往 ltool_plugin GitHub 插件仓库网页"));
+    connect(m_repoBtn, &QPushButton::clicked, this, [] {
         QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/mateo-ki/ltool_plugin")));
     });
 
@@ -329,8 +329,8 @@ ToolsPage::ToolsPage(QWidget* parent)
         "QPushButton:hover { background: @buttonUp; border-color: @borderHiUp; }"
         "QPushButton:pressed { background: @buttonDown; }"
     ;
-    Theme::bind(refresh, kTopBtnQss);
-    Theme::bind(repoBtn, kTopBtnQss);
+    Theme::bind(m_refreshBtn, kTopBtnQss);
+    Theme::bind(m_repoBtn, kTopBtnQss);
     // 出口那颗和它们同款：autoRaise 的淡箭头在深色页眉里就是"找不到退出按钮"（他 2026-10-18 的原话）
     Theme::bind(m_back, kTopBtnQss);
 
@@ -364,8 +364,8 @@ ToolsPage::ToolsPage(QWidget* parent)
     head->addWidget(m_heading);
     head->addStretch(1);
     head->addWidget(m_bulk);
-    head->addWidget(repoBtn);
-    head->addWidget(refresh);
+    head->addWidget(m_repoBtn);
+    head->addWidget(m_refreshBtn);
     lay->addLayout(head);
 
     // 启动优先载入持久化清单缓存
@@ -463,7 +463,7 @@ ToolsPage::ToolsPage(QWidget* parent)
     lay->addWidget(m_stack, 1);
 
     connect(m_back, &QToolButton::clicked, this, [this] { backToGrid(); });
-    connect(refresh, &QPushButton::clicked, this, [this] { refreshStore(); });
+    connect(m_refreshBtn, &QPushButton::clicked, this, [this] { refreshStore(); });
 
     // 每天自动拉取一次清单更新
     if (PluginStore::shouldAutoRefresh() || !m_haveStore) {
@@ -1173,7 +1173,30 @@ bool ToolsPage::showTool(const QString& id, const QString& text)
     m_back->setVisible(true);
     const PluginHost::Meta* md = PluginHost::meta(id);
     m_heading->setText(QStringLiteral("插件商店 · %1").arg(md ? md->name : id));
+    setStoreHeaderVisible(false);
     return true;
+}
+
+void ToolsPage::setStoreHeaderVisible(bool visible)
+{
+    if (m_storeStatus)
+        m_storeStatus->setVisible(visible);
+    if (m_autoNote)
+        m_autoNote->setVisible(visible);
+    if (m_filter)
+        m_filter->setVisible(visible);
+    for (int i = 0; i < 3; ++i) {
+        if (m_shelfBtn[i])
+            m_shelfBtn[i]->setVisible(visible);
+    }
+    if (m_filterNote)
+        m_filterNote->setVisible(visible);
+    if (m_bulk)
+        m_bulk->setVisible(visible);
+    if (m_repoBtn)
+        m_repoBtn->setVisible(visible);
+    if (m_refreshBtn)
+        m_refreshBtn->setVisible(visible);
 }
 
 void ToolsPage::rebuildGrid()
@@ -1220,6 +1243,7 @@ void ToolsPage::backToGrid()
     m_stack->setCurrentIndex(0);
     m_back->setVisible(false);
     m_heading->setText(QStringLiteral("插件商店"));
+    setStoreHeaderVisible(true);
     if (m_filterDirty) {
         // 改过滤那一下人正在看一张页，重排欠着没做；回到墙上的这一步补上。
         // 先清标记再重排：rebuildGrid() 末尾会再回一次这里，不清就递归。

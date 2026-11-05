@@ -101,6 +101,7 @@ private:
     void runInstall(const PluginStore::Entry& e, QPushButton* btn, QLabel* state);   // 真开一条下载
     void startNextInstall();   // 队列里还有就接着装，装完了才重排卡片墙
     void backToGrid();         // 回到那一面卡片墙：按钮 / Esc / 重排之后共用这一条
+    void setStoreHeaderVisible(bool visible); // 插件详情页时隐藏商店专用状态行/过滤条/操作按钮
 
     // 商店顶部那一行的唯一出口（2026-10-23 他那句「不要放到插件详情页面」拍的是 A 档）：
     // 页面上只留一句短话，全文（URL / HTTP 码 / 走的哪条镜像 / 拒收明细）挂到悬停说明，
@@ -125,6 +126,8 @@ private:
     void setBulkLabel(int confirmCount);   // 标签在「一键下载全部」和「确认这 N 颗」之间换，字数对齐所以不撑版面
 
     QPushButton* m_bulk = nullptr;
+    QPushButton* m_repoBtn = nullptr;
+    QPushButton* m_refreshBtn = nullptr;
     bool m_bulkArmed = false;
     QStringList m_bulkIds;          // 这一批排了哪几颗（飞完那一行要按这个数"成了几颗"）
 

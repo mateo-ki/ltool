@@ -7,62 +7,112 @@
 #include <QColor>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QUrl>
 #include <QVBoxLayout>
 
+#include <memory>
 #include <windows.h>
 
 namespace {
 
 struct WingetPkg {
     const char* id;
-    const char* arch;  // "x64" / "x86" / "" = 不分架构
-    const char* file;  // 该架构安装后必然存在的系统文件（检测兜底），空 = 只查注册表
+    const char* arch;       // "x64" / "x86" / "" = 不分架构
+    const char* file;       // 该架构安装后必然存在的系统文件（检测兜底），空 = 只查注册表
+    const char* directUrl;  // 微软官方直链安装包
 };
 
 struct RepairRow {
     const char* name;
     QString match;              // 卸载表显示名包含片段
     QVector<WingetPkg> pkgs;    // 可安装的包
-    const char* url;            // 无 winget 时打开
+    const char* url;            // 微软官方下载主页（可直接在浏览器打开）
     bool builtin;               // Win10+ 系统内置
 };
 
 const RepairRow kRows[] = {
     {".NET Desktop Runtime", "windows desktop runtime",
-     {{"Microsoft.DotNet.DesktopRuntime.8", "", ""}}, "https://dotnet.microsoft.com/download/dotnet", false},
+     {{"Microsoft.DotNet.DesktopRuntime.8", "", "", "https://dotnet.microsoft.com/download/dotnet/8.0"}},
+     "https://dotnet.microsoft.com/download/dotnet", false},
     {"VC++ 2005 Redistributable", "visual c++ 2005",
-     {{"Microsoft.VCRedist.2005.x64", "x64", "msvcr80.dll"},
-      {"Microsoft.VCRedist.2005.x86", "x86", "msvcr80.dll"}}, "", false},
+     {{"Microsoft.VCRedist.2005.x64", "x64", "msvcr80.dll",
+       "https://download.microsoft.com/download/4/A/2/4A22001F-FA3B-4C13-BF4E-42EC249D51C4/vcredist_x64.EXE"},
+      {"Microsoft.VCRedist.2005.x86", "x86", "msvcr80.dll",
+       "https://download.microsoft.com/download/4/A/2/4A22001F-FA3B-4C13-BF4E-42EC249D51C4/vcredist_x86.EXE"}},
+     "https://www.microsoft.com/zh-cn/download/details.aspx?id=26347", false},
     {"VC++ 2008 Redistributable", "visual c++ 2008",
-     {{"Microsoft.VCRedist.2008.x64", "x64", "msvcr90.dll"},
-      {"Microsoft.VCRedist.2008.x86", "x86", "msvcr90.dll"}}, "", false},
+     {{"Microsoft.VCRedist.2008.x64", "x64", "msvcr90.dll",
+       "https://download.microsoft.com/download/5/D/8/5D8C65CB-C849-4025-8E95-C3966CAFD8AE/vcredist_x64.exe"},
+      {"Microsoft.VCRedist.2008.x86", "x86", "msvcr90.dll",
+       "https://download.microsoft.com/download/5/D/8/5D8C65CB-C849-4025-8E95-C3966CAFD8AE/vcredist_x86.exe"}},
+     "https://www.microsoft.com/zh-cn/download/details.aspx?id=26368", false},
     {"VC++ 2010 Redistributable", "visual c++ 2010",
-     {{"Microsoft.VCRedist.2010.x64", "x64", "msvcr100.dll"},
-      {"Microsoft.VCRedist.2010.x86", "x86", "msvcr100.dll"}}, "", false},
+     {{"Microsoft.VCRedist.2010.x64", "x64", "msvcr100.dll",
+       "https://download.microsoft.com/download/1/6/5/165255E7-1014-4D0A-B094-B6A430A6BFFC/vcredist_x64.exe"},
+      {"Microsoft.VCRedist.2010.x86", "x86", "msvcr100.dll",
+       "https://download.microsoft.com/download/1/6/5/165255E7-1014-4D0A-B094-B6A430A6BFFC/vcredist_x86.exe"}},
+     "https://www.microsoft.com/zh-cn/download/details.aspx?id=26999", false},
     {"VC++ 2012 Redistributable", "visual c++ 2012",
-     {{"Microsoft.VCRedist.2012.x64", "x64", "msvcr110.dll"},
-      {"Microsoft.VCRedist.2012.x86", "x86", "msvcr110.dll"}}, "", false},
+     {{"Microsoft.VCRedist.2012.x64", "x64", "msvcr110.dll",
+       "https://download.microsoft.com/download/1/6/B/16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x64.exe"},
+      {"Microsoft.VCRedist.2012.x86", "x86", "msvcr110.dll",
+       "https://download.microsoft.com/download/1/6/B/16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x86.exe"}},
+     "https://www.microsoft.com/zh-cn/download/details.aspx?id=30679", false},
     {"VC++ 2013 Redistributable", "visual c++ 2013",
-     {{"Microsoft.VCRedist.2013.x64", "x64", "msvcr120.dll"},
-      {"Microsoft.VCRedist.2013.x86", "x86", "msvcr120.dll"}}, "", false},
+     {{"Microsoft.VCRedist.2013.x64", "x64", "msvcr120.dll",
+       "https://download.visualstudio.microsoft.com/download/pr/10912041/cee5d6bca2ddbcd039da727bf4acb48a/vcredist_x64.exe"},
+      {"Microsoft.VCRedist.2013.x86", "x86", "msvcr120.dll",
+       "https://download.visualstudio.microsoft.com/download/pr/10912113/5da66ddebb0ad32ebd4b922fd82e8e25/vcredist_x86.exe"}},
+     "https://support.microsoft.com/zh-cn/help/4032938", false},
     {"VC++ 2015-2022 Redistributable", "visual c++ redistributable",
-     {{"Microsoft.VCRedist.2015+.x64", "x64", "vcruntime140.dll"},
-      {"Microsoft.VCRedist.2015+.x86", "x86", "vcruntime140.dll"}}, "", false},
+     {{"Microsoft.VCRedist.2015+.x64", "x64", "vcruntime140.dll",
+       "https://aka.ms/vs/17/release/vc_redist.x64.exe"},
+      {"Microsoft.VCRedist.2015+.x86", "x86", "vcruntime140.dll",
+       "https://aka.ms/vs/17/release/vc_redist.x86.exe"}},
+     "https://learn.microsoft.com/zh-cn/cpp/windows/latest-supported-vc-redist", false},
     {"Visual Studio 2010 Tools For Office Runtime", "visual studio 2010 tools for office runtime",
      {}, "https://www.microsoft.com/zh-cn/download/details.aspx?id=48208", false},
     {"DirectX End-User Runtime", "directx runtime",
-     {{"Microsoft.DirectX", "", "d3dx9_43.dll"}}, "", false},
+     {{"Microsoft.DirectX", "", "d3dx9_43.dll",
+       "https://download.microsoft.com/download/1/7/1/1718CCC4-6315-4D8E-9543-8E28A4E18C4C/dxwebsetup.exe"}},
+     "https://www.microsoft.com/zh-cn/download/details.aspx?id=35", false},
     {"Universal CRT", "universal c runtime",
-     {}, "", true},
+     {}, "https://support.microsoft.com/zh-cn/topic/kb2999226", true},
 };
+
+const WingetPkg* findPkg(const QString& id)
+{
+    for (const RepairRow& r : kRows) {
+        for (const WingetPkg& pkg : r.pkgs) {
+            if (QString::fromLatin1(pkg.id).compare(id, Qt::CaseInsensitive) == 0)
+                return &pkg;
+        }
+    }
+    return nullptr;
+}
+
+const RepairRow* findRowForPkg(const QString& id)
+{
+    for (const RepairRow& r : kRows) {
+        for (const WingetPkg& pkg : r.pkgs) {
+            if (QString::fromLatin1(pkg.id).compare(id, Qt::CaseInsensitive) == 0)
+                return &r;
+        }
+    }
+    return nullptr;
+}
 
 struct InstalledInfo {
     QString name;
@@ -134,29 +184,53 @@ bool fileExistsIn(const QStringList& dirs, const QString& fileName)
     return false;
 }
 
-// 这一行里还没装上的 winget 包：注册表条目按架构匹配，匹配不到再看关键系统文件
+// 检测某个具体包是否已在本机就绪：优先匹配卸载注册表，老运行库支持 WinSxS 程序集探测
+bool isPkgInstalled(const RepairRow& r, const WingetPkg& pkg,
+                    const QVector<InstalledInfo>& names, QString* outVer = nullptr)
+{
+    const bool isX64 = QString(pkg.arch) == QLatin1String("x64");
+    for (const InstalledInfo& n : names) {
+        if (!n.name.contains(r.match, Qt::CaseInsensitive))
+            continue;
+        const bool archOk = pkg.arch[0] == 0
+            || (isX64 ? (!n.wow || n.name.contains("x64"))
+                      : (n.wow || n.name.contains("x86")));
+        if (archOk) {
+            if (outVer && outVer->isEmpty() && !n.version.isEmpty())
+                *outVer = QString("v%1").arg(n.version);
+            return true;
+        }
+    }
+
+    // 针对 VC++ 2005 (CRT 8.0) 和 VC++ 2008 (CRT 9.0) 探测 WinSxS 程序集目录
+    if (pkg.file[0] != 0) {
+        const QString fileName = QString::fromLatin1(pkg.file);
+        if (fileName == QLatin1String("msvcr80.dll") || fileName == QLatin1String("msvcr90.dll")) {
+            const QString crtPrefix = (fileName == QLatin1String("msvcr80.dll"))
+                ? QStringLiteral("microsoft.vc80.crt")
+                : QStringLiteral("microsoft.vc90.crt");
+            QDir winsxs(QStringLiteral("C:/Windows/WinSxS"));
+            const QString filter = (isX64 ? QStringLiteral("amd64_") : QStringLiteral("x86_"))
+                + crtPrefix + QLatin1Char('*');
+            const QStringList dirs = winsxs.entryList({filter}, QDir::Dirs | QDir::NoDotAndDotDot);
+            for (const QString& d : dirs) {
+                if (QFileInfo::exists(winsxs.filePath(d + QLatin1Char('/') + fileName)))
+                    return true;
+            }
+        }
+        // 关键系统文件常规探测
+        if (fileExistsIn({isX64 ? "C:/Windows/System32" : "C:/Windows/SysWOW64"}, fileName))
+            return true;
+    }
+    return false;
+}
+
+// 这一行里还没装上的 winget 包
 QStringList missingPkgs(const RepairRow& r, const QVector<InstalledInfo>& names)
 {
     QStringList miss;
     for (const WingetPkg& pkg : r.pkgs) {
-        const bool isX64 = QString(pkg.arch) == QLatin1String("x64");
-        bool have = false;
-        for (const InstalledInfo& n : names) {
-            if (!n.name.contains(r.match, Qt::CaseInsensitive))
-                continue;
-            const bool archOk = pkg.arch[0] == 0
-                || (isX64 ? (!n.wow || n.name.contains("x64"))
-                          : (n.wow || n.name.contains("x86")));
-            if (archOk) {
-                have = true;
-                break;
-            }
-        }
-        if (!have && pkg.file[0] != 0) {
-            have = fileExistsIn({isX64 ? "C:/Windows/System32" : "C:/Windows/SysWOW64"},
-                                QString::fromLatin1(pkg.file));
-        }
-        if (!have)
+        if (!isPkgInstalled(r, pkg, names))
             miss.append(QString::fromLatin1(pkg.id));
     }
     return miss;
@@ -167,11 +241,14 @@ QStringList missingPkgs(const RepairRow& r, const QVector<InstalledInfo>& names)
 RepairPage::RepairPage(QWidget* parent)
     : QWidget(parent)
 {
+    m_nam = new QNetworkAccessManager(this);
+    DevEnv::applyProxy(m_nam);
+
     auto* lay = new QVBoxLayout(this);
     lay->setContentsMargins(12, 4, 4, 4);
 
     auto* head = new QHBoxLayout;
-    auto* tip = new QLabel("启动软件提示 dll 缺失？检测微软常用运行库（区分 x64/x86），整行点击安装缺失项。");
+    auto* tip = new QLabel("启动软件提示 dll 缺失？检测微软常用运行库（区分 x64/x86），支持一键静默安装、内置直链下载与官网直达。");
     tip->setObjectName("tip");
     tip->setWordWrap(true);
     head->addWidget(tip, 1);
@@ -211,6 +288,15 @@ RepairPage::RepairPage(QWidget* parent)
     rescan();
 }
 
+RepairPage::~RepairPage()
+{
+    if (m_downloadReply) {
+        m_downloadReply->abort();
+        m_downloadReply->deleteLater();
+        m_downloadReply = nullptr;
+    }
+}
+
 void RepairPage::clearRows()
 {
     while (m_rowsLay->count() > 1) {
@@ -238,32 +324,15 @@ void RepairPage::rescan()
             installed = true;
             note = "系统内置";
         } else if (!r.pkgs.isEmpty() && r.pkgs.first().arch[0] != 0) {
-            // 分架构检测：注册表条目 或 关键系统文件（新版 VC++ 注册名可能不带年份）
+            // 分架构检测：注册表条目 或 WinSxS / 关键系统文件
             for (const WingetPkg& pkg : r.pkgs) {
-                bool have = false;
                 QString ver;
                 const bool isX64 = QString(pkg.arch) == "x64";
-                for (const InstalledInfo& n : names) {
-                    if (!n.name.contains(r.match, Qt::CaseInsensitive))
-                        continue;
-                    const bool archOk = isX64
-                        ? (!n.wow || n.name.contains("x64"))
-                        : (n.wow || n.name.contains("x86"));
-                    if (!archOk)
-                        continue;
-                    have = true;
-                    if (ver.isEmpty() && !n.version.isEmpty())
-                        ver = n.version;
-                    break;
-                }
-                if (!have && pkg.file[0] != 0) {
-                    have = fileExistsIn({isX64 ? "C:/Windows/System32" : "C:/Windows/SysWOW64"},
-                                        pkg.file);
-                }
+                const bool have = isPkgInstalled(r, pkg, names, &ver);
                 if (have) {
                     installed = true;
-                    if (ver.isEmpty())
-                        ver = pkg.file;
+                    if (!ver.isEmpty() && note.isEmpty())
+                        note = ver;
                     continue;
                 }
                 if (isX64) needX64 = true;
@@ -273,6 +342,12 @@ void RepairPage::rescan()
                 installed = false;
                 note.clear();
             }
+        } else if (!r.pkgs.isEmpty()) {
+            const WingetPkg& pkg = r.pkgs.first();
+            QString ver;
+            installed = isPkgInstalled(r, pkg, names, &ver);
+            if (installed && !ver.isEmpty())
+                note = ver;
         } else {
             for (const InstalledInfo& n : names) {
                 if (n.name.contains(r.match, Qt::CaseInsensitive)) {
@@ -290,7 +365,7 @@ void RepairPage::rescan()
             m_missing.append(rowIndex);
         }
 
-        // 行：名称 + 状态/版本 + [安装]（仅缺失项）
+        // 行：名称 + 状态/版本 + [安装] / [官网]
         auto* row = new QWidget(this);
         row->setAttribute(Qt::WA_StyledBackground);
         row->setObjectName("row");
@@ -323,13 +398,26 @@ void RepairPage::rescan()
         rowLay->addWidget(status);
 
         if (!installed) {
-            auto* installBtn = new QPushButton("安装", row);
-            installBtn->setObjectName("primary");
-            installBtn->setFixedWidth(72);
-            installBtn->setCursor(Qt::PointingHandCursor);
-            connect(installBtn, &QPushButton::clicked, this,
-                    [this, rowIndex] { installRow(rowIndex); });
-            rowLay->addWidget(installBtn);
+            if (!r.pkgs.isEmpty()) {
+                auto* installBtn = new QPushButton("安装", row);
+                installBtn->setObjectName("primary");
+                installBtn->setFixedWidth(64);
+                installBtn->setCursor(Qt::PointingHandCursor);
+                connect(installBtn, &QPushButton::clicked, this,
+                        [this, rowIndex] { installRow(rowIndex); });
+                rowLay->addWidget(installBtn);
+            }
+
+            if (r.url[0] != 0) {
+                auto* webBtn = new QPushButton(r.pkgs.isEmpty() ? "官网下载" : "官网", row);
+                webBtn->setFixedWidth(r.pkgs.isEmpty() ? 72 : 56);
+                webBtn->setCursor(Qt::PointingHandCursor);
+                webBtn->setToolTip(QString("在浏览器中打开「%1」微软官方下载页面").arg(r.name));
+                connect(webBtn, &QPushButton::clicked, this, [&r] {
+                    Platform::launch(r.url);
+                });
+                rowLay->addWidget(webBtn);
+            }
         }
 
         row->installEventFilter(this);
@@ -350,9 +438,9 @@ void RepairPage::rescan()
     m_status->setText(allOk
         ? "全部正常 ✓"
         : (autoFixable > 0
-               ? QString("有 %1 项可自动安装：点「一键修复」全装，或点击单行只修那一项。")
+               ? QString("有 %1 项可自动安装：点「一键修复」全装，点击「安装」装单项，或点「官网」手动下载。")
                      .arg(autoFixable)
-               : "存在未安装项，但没有可自动安装的包：点击该行会打开官方下载页。"));
+               : "存在未安装项：点击该行或右侧「官网下载」打开官方页面。"));
 }
 
 bool RepairPage::eventFilter(QObject* obj, QEvent* e)
@@ -379,6 +467,26 @@ void RepairPage::installRow(int row)
         if (miss.isEmpty()) {
             m_status->setText(QString("%1 已完整安装。").arg(QString::fromLatin1(r.name)));
             return;
+        }
+        if (!DevEnv::wingetAvailable()) {
+            // 系统没有 winget，直接给出直链/官网下载
+            const WingetPkg& firstPkg = r.pkgs.first();
+            if (firstPkg.directUrl && firstPkg.directUrl[0] != 0) {
+                if (QMessageBox::question(
+                        this, "ltool",
+                        QString("系统未检测到 winget。是否使用内置下载器下载「%1」？\n\n"
+                                "· 点【是】：直接下载官方安装包并自动运行\n"
+                                "· 点【否】：在浏览器打开微软官方下载页")
+                            .arg(QString::fromLatin1(r.name))) == QMessageBox::Yes) {
+                    downloadAndRun(QString::fromLatin1(r.name), QString::fromLatin1(firstPkg.directUrl));
+                    return;
+                }
+            }
+            if (r.url && r.url[0] != 0) {
+                Platform::launch(r.url);
+                QMessageBox::information(this, "ltool", "已打开官方下载页，安装后点击“重新检测”。");
+                return;
+            }
         }
         installQueue(QString::fromLatin1(r.name), miss);
         return;
@@ -462,19 +570,161 @@ void RepairPage::installNext()
                 m_queue.clear();
             } else {
                 m_log->appendPlainText(QString("!! %1 失败（%2）").arg(id, hex));
-                if (out.contains("1603"))
+                const WingetPkg* pkg = findPkg(id);
+                const RepairRow* row = findRowForPkg(id);
+                if (pkg && pkg->directUrl && pkg->directUrl[0] != 0)
+                    m_log->appendPlainText(QString("  · 官方直链：%1").arg(pkg->directUrl));
+                if (row && row->url && row->url[0] != 0)
+                    m_log->appendPlainText(QString("  · 官方主页：%1").arg(row->url));
+
+                if (out.contains("1603")) {
                     m_log->appendPlainText(
                         "提示：MSI 返回 1603，说明系统里这个运行库的安装记录已损坏"
                         "（常见于 VC++ 2005 这类老组件）。可用微软“程序安装和卸载疑难解答”"
                         "清理残留后再试；若无程序依赖它，忽略即可。");
-                else if (out.contains("0x80070005"))
+                } else if (out.contains("0x80070005")) {
                     m_log->appendPlainText("提示：权限不足，请以管理员身份重试该组件。");
+                }
+
+                const bool isDlErr = hex == "0x8A15005E" || hex == "0x80072EE7" || hex == "0x80072EFE"
+                    || out.contains("0x8a15005e", Qt::CaseInsensitive)
+                    || out.contains("0x80072ee7", Qt::CaseInsensitive)
+                    || out.contains("0x80072efe", Qt::CaseInsensitive)
+                    || out.contains(QStringLiteral("下载程序包时出错"))
+                    || out.contains("Failed in attempting to download");
+                if (isDlErr) {
+                    m_log->appendPlainText("提示：网络连接微软服务器超时，winget 下载失败。已为您提供官方直链与官网链接。");
+                    if (pkg && pkg->directUrl && pkg->directUrl[0] != 0) {
+                        const int choice = QMessageBox::question(
+                            this, "ltool - 下载失败",
+                            QString("组件 %1 通过 winget 下载失败（微软 CDN 网络超时）。\n\n"
+                                    "是否使用内置下载器直接下载官方安装包？\n\n"
+                                    "· 点【是】：直接下载并自动运行安装向导\n"
+                                    "· 点【否】：在浏览器打开微软官方下载页面\n"
+                                    "· 点【取消】：取消操作")
+                                .arg(id),
+                            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+                        if (choice == QMessageBox::Yes) {
+                            downloadAndRun(QString::fromLatin1(pkg->id), QString::fromLatin1(pkg->directUrl));
+                        } else if (choice == QMessageBox::No && row && row->url && row->url[0] != 0) {
+                            Platform::launch(row->url);
+                        }
+                    } else if (row && row->url && row->url[0] != 0) {
+                        Platform::launch(row->url);
+                    }
+                }
             }
             installNext();
         });
     if (!started) {
         m_installing = false;
         m_log->appendPlainText(QString("!! %1 无法发起：%2").arg(id, msg));
+        const WingetPkg* pkg = findPkg(id);
+        const RepairRow* row = findRowForPkg(id);
+        if (pkg && pkg->directUrl && pkg->directUrl[0] != 0)
+            m_log->appendPlainText(QString("  · 官方直链：%1").arg(pkg->directUrl));
+        if (row && row->url && row->url[0] != 0)
+            m_log->appendPlainText(QString("  · 官方主页：%1").arg(row->url));
+
+        if (pkg && pkg->directUrl && pkg->directUrl[0] != 0) {
+            const int choice = QMessageBox::question(
+                this, "ltool - 无法发起 winget",
+                QString("组件 %1 无法通过 winget 安装（%2）。\n\n"
+                        "是否使用内置下载器直接下载官方安装包？\n\n"
+                        "· 点【是】：直接下载并自动运行安装向导\n"
+                        "· 点【否】：在浏览器打开微软官方下载页面\n"
+                        "· 点【取消】：取消操作")
+                    .arg(id, msg),
+                QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+            if (choice == QMessageBox::Yes) {
+                downloadAndRun(QString::fromLatin1(pkg->id), QString::fromLatin1(pkg->directUrl));
+            } else if (choice == QMessageBox::No && row && row->url && row->url[0] != 0) {
+                Platform::launch(row->url);
+            }
+        }
         installNext();
     }
+}
+
+void RepairPage::downloadAndRun(const QString& title, const QString& url)
+{
+    if (url.isEmpty())
+        return;
+    if (m_downloadReply) {
+        QMessageBox::information(this, QStringLiteral("ltool"), QStringLiteral("已有安装包正在下载，请等它下载完成。"));
+        return;
+    }
+
+    QUrl qurl(url);
+    QString fileName = QFileInfo(qurl.path()).fileName();
+    if (fileName.isEmpty() || !fileName.contains(QLatin1Char('.')))
+        fileName = QStringLiteral("installer.exe");
+    const QString savePath = QDir::tempPath() + QLatin1Char('/') + fileName;
+
+    m_log->appendPlainText(QString("=== 开始内置下载：%1 ===").arg(title));
+    m_log->appendPlainText(QString("来源：%1").arg(url));
+    m_log->appendPlainText(QString("保存至：%1").arg(savePath));
+    m_status->setText(QString("正在下载 %1…").arg(title));
+
+    auto file = std::make_shared<QFile>(savePath);
+    if (!file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        m_log->appendPlainText(QString("!! 创建临时文件失败：%1").arg(savePath));
+        return;
+    }
+
+    QNetworkRequest req(qurl);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    req.setTransferTimeout(60000);
+    req.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+
+    m_downloadReply = m_nam->get(req);
+    const QPointer<RepairPage> guard(this);
+
+    connect(m_downloadReply, &QNetworkReply::readyRead, this, [guard, file] {
+        if (!guard || !guard->m_downloadReply)
+            return;
+        file->write(guard->m_downloadReply->readAll());
+    });
+
+    connect(m_downloadReply, &QNetworkReply::downloadProgress, this, [this, guard, title](qint64 received, qint64 total) {
+        if (!guard) return;
+        if (total > 0) {
+            const int pct = int((received * 100) / total);
+            m_status->setText(QString("正在下载 %1：%2% (%3MB / %4MB)")
+                                  .arg(title)
+                                  .arg(pct)
+                                  .arg(double(received) / (1024.0 * 1024.0), 0, 'f', 1)
+                                  .arg(double(total) / (1024.0 * 1024.0), 0, 'f', 1));
+        } else {
+            m_status->setText(QString("正在下载 %1：%2MB")
+                                  .arg(title)
+                                  .arg(double(received) / (1024.0 * 1024.0), 0, 'f', 1));
+        }
+    });
+
+    connect(m_downloadReply, &QNetworkReply::finished, this, [this, guard, file, savePath, title] {
+        file->flush();
+        file->close();
+
+        if (!guard)
+            return;
+
+        if (m_downloadReply->error() != QNetworkReply::NoError) {
+            const QString err = m_downloadReply->errorString();
+            m_log->appendPlainText(QString("!! 内置下载失败：%1").arg(err));
+            m_status->setText(QString("%1 下载失败，可点击「官网」在浏览器中下载。").arg(title));
+            m_downloadReply->deleteLater();
+            m_downloadReply = nullptr;
+            return;
+        }
+
+        m_log->appendPlainText(QString("++ 内置下载完成：%1（%2）").arg(title, savePath));
+        m_log->appendPlainText(QStringLiteral("提示：正在启动官方安装向导，请完成安装后点击「重新检测」。"));
+        m_status->setText(QString("%1 下载完成，已启动安装向导。").arg(title));
+        m_downloadReply->deleteLater();
+        m_downloadReply = nullptr;
+
+        // 启动安装程序（支持管理员提权请求）
+        Platform::launch(savePath);
+    });
 }

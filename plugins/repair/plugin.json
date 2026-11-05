@@ -3,7 +3,7 @@
  "Name": "DLL 修复",
  "Desc": "检测微软运行库 / DirectX / .NET，缺什么补什么",
  "Api": 4,
- "Version": "1.0.2",
+ "Version": "1.0.3",
  "Keywords": [
   "dll",
   "运行库",

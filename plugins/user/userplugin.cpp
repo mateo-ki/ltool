@@ -19,7 +19,7 @@ public:
     int apiVersion() const override { return LTOOL_PLUGIN_API_VERSION; }
     QString id() const override { return QStringLiteral("user"); }
     QString name() const override { return QStringLiteral("Windows 用户名"); }
-    QString desc() const override { return QStringLiteral("看清自己是哪个账户，改显示名或改账户名（都要管理员授权）"); }
+    QString desc() const override { return QStringLiteral("系统用户账户与权限治理：查看账户属性、改显示名/登录名或新建本地用户"); }
     QStringList keywords() const override
     {
         return { QStringLiteral("用户名"), QStringLiteral("账户"), QStringLiteral("改名"), QStringLiteral("user"), QStringLiteral("username"), QStringLiteral("account"), QStringLiteral("fullname") };

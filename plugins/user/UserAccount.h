@@ -54,6 +54,7 @@ class UserAccountPage : public QWidget {
     Q_OBJECT
 public:
     explicit UserAccountPage(QWidget* parent = nullptr);
+    ~UserAccountPage() override;
 
 private:
     void refresh();          // 后台跑 powershell（读一次要半秒多，不能卡在开页面上）

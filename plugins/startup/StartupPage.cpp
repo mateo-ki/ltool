@@ -91,11 +91,7 @@ bool isProblem(const StartupItem& it)
     return it.targetMissing || !it.enabled || (it.checkedSig && !it.hasSignature);
 }
 
-// 系统服务这条页默认不列（他 2026-10-21 点名）。一台机器上自动启动的服务几十上百条，
-// 全在 %SystemRoot% 下面，混进来只会把"要看的那几条"挤掉。
-// 没给出绝对路径的那些（svchost 那种裸名字）也归这里：这条页对它唯一能说的话就是
-// "系统在开机时把它拉起来了"，那是所有服务的共同点，不是信息。
-// 但"藏了一批"必须在汇总里点名，不许列表悄悄变短。
+// 系统服务默认不列（%SystemRoot% 下面的那些避免反客为主），用户勾选时才展开
 bool isHiddenService(const StartupItem& it)
 {
     if (it.source != StartupItem::Source::Service)
@@ -104,29 +100,26 @@ bool isHiddenService(const StartupItem& it)
         || StartupAudit::isSystemService(it.targetPath, qEnvironmentVariable("SystemRoot"));
 }
 
-// 下面三个函数只负责"把事实说成人话"：什么时候跑 / 谁签的名 / 要不要管。
-// 结论全部从已有事实推出来，不去猜某个软件是干什么的。
-
 QString whenLabel(const StartupItem& it)
 {
     switch (it.source) {
     case StartupItem::Source::RegistryRun:
         return it.note.contains(QLatin1String("RunOnce"))
-            ? QStringLiteral("下次登录时只跑一次")
-            : QStringLiteral("每次登录以后");
+            ? QStringLiteral("登录单次 (RunOnce)")
+            : QStringLiteral("登录自动启动");
     case StartupItem::Source::StartupFolder:
-        return QStringLiteral("每次登录以后");
+        return QStringLiteral("登录启动文件夹");
     case StartupItem::Source::Service:
         return it.note.contains(QStringLiteral("延迟"))
-            ? QStringLiteral("开机后稍等一会儿自动起来")
-            : QStringLiteral("开机就自动起来");
+            ? QStringLiteral("开机延迟启动")
+            : QStringLiteral("开机自动启动");
     case StartupItem::Source::Task:
         if (it.note.contains(QStringLiteral("启动时")) && it.note.contains(QStringLiteral("登录时")))
-            return QStringLiteral("开机和登录时");
-        return it.note.contains(QStringLiteral("启动时")) ? QStringLiteral("开机时")
-                                                          : QStringLiteral("登录时");
+            return QStringLiteral("开机/登录双触发");
+        return it.note.contains(QStringLiteral("启动时")) ? QStringLiteral("系统启动触发")
+                                                          : QStringLiteral("用户登录触发");
     case StartupItem::Source::ShellExtension:
-        return QStringLiteral("别的程序启动时被塞进去");
+        return QStringLiteral("进程外壳注入");
     }
     return {};
 }
@@ -134,39 +127,38 @@ QString whenLabel(const StartupItem& it)
 QString whoLabel(const StartupItem& it)
 {
     if (!it.publisher.isEmpty())
-        return it.publisher + QStringLiteral(" 签的名");
-    return it.checkedSig ? QStringLiteral("没有数字签名")
-                         : QStringLiteral("没查到签名（拿不到文件路径）");
+        return it.publisher;
+    return it.checkedSig ? QStringLiteral("无数字签名")
+                         : QStringLiteral("未校验签名");
 }
 
 QString verdictLabel(const StartupItem& it)
 {
     if (it.targetMissing)
-        return QStringLiteral("文件已经不在了 · 建议清掉（工具 → 注册表分析）");
+        return QStringLiteral("目标路径失效 · 建议清理");
     if (!it.enabled)
-        return it.approvedPath.isEmpty() ? QStringLiteral("已经被关掉 · 不用管")
-                                         : QStringLiteral("已经被关掉 · 选中它可以恢复");
+        return it.approvedPath.isEmpty() ? QStringLiteral("已停用")
+                                         : QStringLiteral("已停用 · 可重新启用");
     if (it.publisher.contains(QLatin1String("Microsoft"), Qt::CaseInsensitive))
-        return QStringLiteral("微软的东西 · 建议留着");
+        return QStringLiteral("微软系统原生组件");
     switch (it.source) {
     case StartupItem::Source::Service:
-        return QStringLiteral("后台服务，不在桌面上抢开机时间 · 不认识就先留着");
+        return QStringLiteral("后台系统服务");
     case StartupItem::Source::ShellExtension:
-        return QStringLiteral("挂在别的进程里 · 出问题时才需要查它");
+        return QStringLiteral("资源管理器扩展项");
     default:
-        // "没签名"这件事由 whoLabel 说，这里别重复一遍
-        return QStringLiteral("正常自启动 · 选中它，点「禁用这一项」就能关");
+        return QStringLiteral("常规自启程序");
     }
 }
 
 QString plainGroup(StartupItem::Source s)
 {
     switch (s) {
-    case StartupItem::Source::RegistryRun:    return QStringLiteral("登录以后自动启动的程序");
-    case StartupItem::Source::StartupFolder:  return QStringLiteral("放在“启动”文件夹里的东西");
-    case StartupItem::Source::Service:        return QStringLiteral("开机自动起来的后台服务");
-    case StartupItem::Source::Task:           return QStringLiteral("计划任务里设了开机/登录触发的");
-    case StartupItem::Source::ShellExtension: return QStringLiteral("塞进浏览器 / 资源管理器的加载项");
+    case StartupItem::Source::RegistryRun:    return QStringLiteral("注册表自启 (Run)");
+    case StartupItem::Source::StartupFolder:  return QStringLiteral("启动文件夹 (Startup)");
+    case StartupItem::Source::Service:        return QStringLiteral("后台服务 (Service)");
+    case StartupItem::Source::Task:           return QStringLiteral("计划任务 (Task)");
+    case StartupItem::Source::ShellExtension: return QStringLiteral("外壳扩展 (ShellExtension)");
     }
     return {};
 }
@@ -178,32 +170,32 @@ QString groupLabel(const QString& base, StartupItem::Source src, bool hideSysSvc
     return base;
 }
 
-// 徽章只放结论关键词，完整那句在选中后的下面一行里
+// 徽章：系统化标准状态标签
 QString shortVerdict(const StartupItem& it, InfoRow::Badge* kind)
 {
     *kind = InfoRow::Neutral;
     if (it.targetMissing) {
         *kind = InfoRow::Bad;
-        return QStringLiteral("文件没了 · 建议清");
+        return QStringLiteral("路径失效");
     }
     if (!it.enabled) {
         *kind = InfoRow::Muted;
-        return QStringLiteral("已关掉 · 不用管");
+        return QStringLiteral("已禁用");
     }
     if (it.publisher.contains(QLatin1String("Microsoft"), Qt::CaseInsensitive)) {
         *kind = InfoRow::Good;
-        return QStringLiteral("微软的 · 建议留着");
+        return QStringLiteral("微软原生");
     }
     if (it.publisher.isEmpty()) {
         *kind = InfoRow::Warn;
-        return QStringLiteral("没签名 · 自己判断");
+        return QStringLiteral("未签名");
     }
     if (it.source == StartupItem::Source::Service) {
-        *kind = InfoRow::Good;
-        return QStringLiteral("后台服务 · 不用管");
+        *kind = InfoRow::Neutral;
+        return QStringLiteral("系统服务");
     }
     *kind = InfoRow::Good;
-    return QStringLiteral("正常自启动");
+    return QStringLiteral("正常自启");
 }
 
 } // namespace
@@ -214,7 +206,7 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
     lay->setContentsMargins(12, 10, 12, 10);
     lay->setSpacing(8);
 
-    // 顶部标题与特性标签
+    // 顶部标题与系统特性标签
     auto* titleRow = new QHBoxLayout;
     titleRow->setSpacing(8);
 
@@ -224,13 +216,13 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
     tf.setBold(true);
     title->setFont(tf);
 
-    auto* tag1 = new QLabel(QStringLiteral("⚡ 就地两段安全切换"), this);
+    auto* tag1 = new QLabel(QStringLiteral("⚡ 安全两段切换"), this);
     tag1->setStyleSheet("color:#ea580c;background:rgba(234,88,12,0.08);border:1px solid rgba(234,88,12,0.22);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500;");
 
     auto* tag2 = new QLabel(QStringLiteral("🛡️ 原生同步任务管理器"), this);
     tag2->setStyleSheet("color:#0284c7;background:rgba(2,132,199,0.08);border:1px solid rgba(2,132,199,0.22);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500;");
 
-    auto* tag3 = new QLabel(QStringLiteral("🔍 5 大自启源全量排查"), this);
+    auto* tag3 = new QLabel(QStringLiteral("🔍 5 大自启源"), this);
     tag3->setStyleSheet("color:#7c3aed;background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.22);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500;");
 
     titleRow->addWidget(title);
@@ -240,13 +232,10 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
     titleRow->addStretch(1);
     lay->addLayout(titleRow);
 
+    // 系统引导说明（精炼系统化，保留必要关键词）
     auto* tip = new QLabel(QStringLiteral(
-        "这一页回答三个问题：开机后有东西自己起来吗？都是谁？哪些该管？\n"
-        "每一行读法：软件名 — 什么时候跑 · 谁签的名 · 要不要管。"
-        "红字是文件已经不在了的（建议清），灰字是已经被关掉的（不用管），黄字是没有数字签名的（自己判断）。\n"
-        "选中「登录以后自动启动的程序」或「放在“启动”文件夹里的东西」那两栏里的某一行，点「禁用这一项」就能关掉它"
-        "（要按两下，第一下只是确认）；已经关掉的选中后点「恢复这一项」就回来。"
-        "写的就是任务管理器 · 启动 里那同一个开关，随时能反回来。服务、计划任务、加载项这一页不动。"), this);
+        "系统 5 大自启动源排查（注册表、启动文件夹、后台服务、计划任务、外壳扩展）。"
+        "识别失效目标与签名有效性；选中应用项可通过「禁用这一项」安全停用（原生同步任务管理器）。"), this);
     tip->setObjectName(QStringLiteral("tip"));
     tip->setWordWrap(true);
     lay->addWidget(tip);
@@ -261,11 +250,11 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
     auto* reportBtn = new QPushButton(QStringLiteral("导出报告"), this);
     reportBtn->setCursor(Qt::PointingHandCursor);
 
-    auto* tsMgr = new QPushButton(QStringLiteral("打开任务管理器的启动项设置"), this);
+    auto* tsMgr = new QPushButton(QStringLiteral("系统启动管理"), this);
     tsMgr->setCursor(Qt::PointingHandCursor);
+    tsMgr->setToolTip(QStringLiteral("打开 Windows 任务管理器 / 设置中的启动项"));
 
-    // 就地两段，不弹模态框：这一页是从设置窗里翻进来的，模态框会被自藏的启动器吞掉
-    //（那的表现就是"这个功能永久点了没反应"，他在那一侧吃过一次）。
+    // 就地两段切换按钮
     m_toggleBtn = new QPushButton(QStringLiteral("禁用这一项"), this);
     m_toggleBtn->setObjectName(QStringLiteral("startupToggle"));
     m_toggleBtn->setCursor(Qt::PointingHandCursor);
@@ -278,27 +267,24 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
     row->addStretch(1);
     lay->addLayout(row);
 
-    // 过滤选择栏
+    // 过滤与控制栏
     auto* filterRow = new QHBoxLayout;
     filterRow->setSpacing(12);
-    auto* filterLbl = new QLabel(QStringLiteral("只看哪一类："), this);
+    auto* filterLbl = new QLabel(QStringLiteral("类别："), this);
     filterLbl->setStyleSheet("font-size:12px;font-weight:500;");
     filterRow->addWidget(filterLbl);
 
     m_filter = new QComboBox(this);
     m_filter->setCursor(Qt::PointingHandCursor);
-    m_filter->addItem(QStringLiteral("全部"));
+    m_filter->addItem(QStringLiteral("全部自启源"));
     for (const auto s : { StartupItem::Source::RegistryRun, StartupItem::Source::StartupFolder,
                           StartupItem::Source::Service, StartupItem::Source::Task,
                           StartupItem::Source::ShellExtension })
         m_filter->addItem(plainGroup(s), int(s));
 
-    m_onlyProblems = new QCheckBox(QStringLiteral("只看需要我处理的"), this);
+    m_onlyProblems = new QCheckBox(QStringLiteral("只看待处理"), this);
     m_onlyProblems->setCursor(Qt::PointingHandCursor);
 
-    // 系统服务默认不列（他 2026-10-21 点名）：一台机器上自动启动的服务几十上百条，
-    // 全在 %SystemRoot% 下面，混在"谁开机自己起来"那一堆里只会把要看的东西挤掉。
-    // 但不许"悄悄少一批" —— 这颗开关 + 汇总那句"另有 N 条没列出"就是留给这件事的出口。
     m_showSysSvc = new QCheckBox(QStringLiteral("显示系统服务"), this);
     m_showSysSvc->setObjectName(QStringLiteral("startupShowSysSvc"));
     m_showSysSvc->setCursor(Qt::PointingHandCursor);
@@ -313,8 +299,7 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
     auto* sumRow = new QHBoxLayout;
     sumRow->setSpacing(6);
     auto* sumIcon = new QLabel(QStringLiteral("📊"), this);
-    m_summary = new QLabel(QStringLiteral("点「开始分析」，把这台机器开机时会自己起来的东西列一遍，"
-                                          "每一行都会告诉你它什么时候跑、谁家的、要不要管。"), this);
+    m_summary = new QLabel(QStringLiteral("就绪。点击「开始分析」检测系统开机自启项目与安全状态。"), this);
     m_summary->setObjectName(QStringLiteral("muted"));
     m_summary->setProperty("testId", "startupSummary");
     m_summary->setWordWrap(true);
@@ -330,7 +315,7 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
     auto* statRow = new QHBoxLayout;
     statRow->setSpacing(6);
     auto* statIcon = new QLabel(QStringLiteral("📍"), this);
-    m_status = new QLabel(QStringLiteral("选中一行可以看它的完整注册位置和命令行。"), this);
+    m_status = new QLabel(QStringLiteral("选中启动项查看详细注册位置、命令行与状态。"), this);
     m_status->setObjectName(QStringLiteral("muted"));
     m_status->setProperty("testId", "startupStatus");
     m_status->setWordWrap(true);
@@ -357,16 +342,19 @@ StartupPage::StartupPage(QWidget* parent) : QWidget(parent)
             return;
         showSelected(sel.first()->data(Qt::UserRole).toInt());
     });
-    connect(m_toggleBtn, &QPushButton::clicked, this, &StartupPage::toggleSelected);
     connect(m_list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        if (!item)
+            return;
         const int i = item->data(Qt::UserRole).toInt();
-        if (i >= 0 && i < m_items.size()) {
-            QGuiApplication::clipboard()->setText(m_items[i].command.isEmpty()
-                                                      ? m_items[i].location
-                                                      : m_items[i].command);
-            m_status->setText(QStringLiteral("已把命令行复制到剪贴板"));
-        }
+        if (i < 0 || i >= m_items.size())
+            return;
+        const StartupItem& it = m_items[i];
+        if (it.command.isEmpty())
+            return;
+        QGuiApplication::clipboard()->setText(it.command);
+        m_status->setText(QStringLiteral("已复制命令：%1").arg(it.command));
     });
+    connect(m_toggleBtn, &QPushButton::clicked, this, &StartupPage::toggleSelected);
 }
 
 void StartupPage::startScan()
@@ -375,7 +363,7 @@ void StartupPage::startScan()
         return;
     m_busy = true;
     m_scanBtn->setEnabled(false);
-    m_status->setText(QStringLiteral("分析中…"));
+    m_status->setText(QStringLiteral("正在扫描自启动项（注册表、服务、计划任务、加载项）…"));
     if (!m_watcher) {
         m_watcher = new QFutureWatcher<QVector<StartupItem>>(this);
         connect(m_watcher, &QFutureWatcherBase::finished, this, [this] {
@@ -393,11 +381,11 @@ void StartupPage::rebuildList()
     m_list->clear();
     m_armed.clear();
     if (m_items.isEmpty()) {
-        m_summary->setText(QStringLiteral("还没有结果，或这台机器上一条启动项都没扫出来。"));
+        m_summary->setText(QStringLiteral("分析完成：未检测到开机启动项。"));
         m_toggleBtn->setEnabled(false);
         return;
     }
-    const int srcSel = m_filter->currentIndex();          // 0 = 全部
+    const int srcSel = m_filter->currentIndex();          // 0 = 全部自启源
     const bool hideSysSvc = !m_showSysSvc->isChecked();
     int missing = 0, unsigned_ = 0, disabled = 0, hiddenSvc = 0;
     for (const StartupItem& it : m_items) {
@@ -429,7 +417,7 @@ void StartupPage::rebuildList()
         }
         if (rows.isEmpty())
             continue;
-        // 有问题的排前面，其余按名字
+        // 有问题的排前面，其余按名字排序
         std::sort(rows.begin(), rows.end(), [this](int a, int b) {
             const bool pa = isProblem(m_items[a]), pb = isProblem(m_items[b]);
             if (pa != pb)
@@ -476,24 +464,18 @@ void StartupPage::rebuildList()
         if (!isProblem(it))
             ++normal;
     }
-    m_summary->setText(QString("一共 %1 项。需要处理的 %2 项（文件已经不在了，红字）· "
-                               "已经被关掉的 %3 项（灰字）· 没签名的 %4 项（黄字）· 其余 %5 项正常。%6")
+    m_summary->setText(QString("一共 %1 项 · 待处理 %2 项 · 已禁用 %3 项 · 未签名 %4 项 · 正常 %5 项%6")
                            .arg(countable).arg(missing).arg(disabled).arg(unsigned_).arg(normal)
                            .arg(hiddenSvc > 0
-                                        ? QString(" 另有 %1 条系统服务没列出（它们是 Windows 自己开机要起的，"
-                                                  "这页改不了；想看就勾上「显示系统服务」）。")
-                                              .arg(hiddenSvc)
-                                        : QString()));
-    m_status->setText(QStringLiteral("想关掉某项：选中它，点「禁用这一项」（要按两下，第一下只是确认）。"
-                                     "文件已经不在了的那些，可以在 工具 → 注册表分析 里连记录一起清掉。"
-                                     "双击一行 = 复制它的命令行。")
+                                    ? QString("（另有 %1 条系统服务没列出，勾选「显示系统服务」可展开）")
+                                          .arg(hiddenSvc)
+                                    : QString()));
+    m_status->setText(QStringLiteral("就绪：选中列表项可查看详细注册表路径、命令参数与启闭控制。双击行可快速复制启动命令。")
                       + (srcSel > 0 && m_filter->itemData(srcSel).toInt() == int(StartupItem::Source::Service)
                                 && hiddenSvc > 0
-                             ? QStringLiteral("\n你只看「后台服务」这一类，而系统服务默认是藏起来的（%1 条）："
-                                              "勾上「显示系统服务」它们就出来。")
+                             ? QStringLiteral("\n（提示：当前分类为后台服务，系统服务默认是藏起来的，勾选「显示系统服务」可展开）")
                                    .arg(hiddenSvc)
                              : QString()));
-    // 列表刚重建，选中已经没了 —— 那颗按钮不能留着上一轮的状态
     m_toggleBtn->setEnabled(false);
     m_toggleBtn->setText(QStringLiteral("禁用这一项"));
     m_toggleBtn->setProperty("armed", false);
@@ -506,22 +488,27 @@ void StartupPage::showSelected(int i)
     if (i < 0 || i >= m_items.size())
         return;
     const StartupItem& it = m_items[i];
-    m_status->setText(QStringLiteral("%1 — %2 · %3 · %4\n从哪来的：%5\n它要执行的命令：%6")
-                          .arg(it.name, whenLabel(it), whoLabel(it), verdictLabel(it), it.location,
-                               it.command.isEmpty() ? QStringLiteral("（看不到命令行）") : it.command));
+    const bool canToggle = !it.approvedPath.isEmpty();
+
+    QString text = QString("【%1】触发: %2  |  签名: %3  |  分类: %4\n"
+                           "注册位置: %5\n"
+                           "执行命令: %6")
+                       .arg(it.name, whenLabel(it), whoLabel(it), plainGroup(it.source),
+                            it.location,
+                            it.command.isEmpty() ? QStringLiteral("（未提供命令行）") : it.command);
+    if (!canToggle) {
+        text += QStringLiteral("\n（提示：该类型为系统底层项，仅应用级项支持快捷开关，这一页不动它）");
+    }
+    m_status->setText(text);
+
     m_armed.clear();
     m_toggleBtn->setProperty("armed", false);
     m_toggleBtn->style()->unpolish(m_toggleBtn);
     m_toggleBtn->style()->polish(m_toggleBtn);
-    // 只有记到了 StartupApproved 那条路径的（注册表 Run / 启动文件夹）能由这页开关。
-    const bool canToggle = !it.approvedPath.isEmpty();
+
     m_toggleBtn->setEnabled(canToggle);
     m_toggleBtn->setText(it.enabled ? QStringLiteral("禁用这一项") : QStringLiteral("恢复这一项"));
     m_toggleBtn->setAccessibleName(m_toggleBtn->text());
-    if (!canToggle)
-        m_status->setText(m_status->text() + QStringLiteral(
-                              "\n这一项不在「任务管理器 → 启动」那套开关里（服务 / 计划任务 / 加载项），"
-                              "这一页不动它。"));
 }
 
 void StartupPage::toggleSelected()
@@ -538,13 +525,10 @@ void StartupPage::toggleSelected()
         return;
     }
 
-    // 就地两段确认：第一下把按钮换成"确认要关 X 吗"，第二下才真写注册表。
-    // 不弹模态框 —— 这一页是从设置窗里翻进来的，模态框会被自藏的启动器吞掉。
     const QString want = it.enabled ? QStringLiteral("禁用") : QStringLiteral("恢复");
     if (m_armed != it.name) {
         m_armed = it.name;
-        m_status->setText(QStringLiteral("确认要%1「%2」吗？再点一次这个按钮就写注册表"
-                                         "（这是任务管理器 · 启动 里的那个开关，随时能反回来）。")
+        m_status->setText(QStringLiteral("确认要%1「%2」吗？再点一次该按钮即生效写入（同步任务管理器，可随时恢复）。")
                               .arg(want, it.name));
         m_toggleBtn->setText(QStringLiteral("再点一次确认%1").arg(want));
         m_toggleBtn->setProperty("armed", true);
@@ -559,11 +543,11 @@ void StartupPage::toggleSelected()
     const QString why = StartupAudit::setStartupEnabled(it, !it.enabled);
     if (!why.isEmpty()) {
         m_toggleBtn->setText(it.enabled ? QStringLiteral("禁用这一项") : QStringLiteral("恢复这一项"));
-        m_status->setText(QStringLiteral("%1「%2」没改成：%3").arg(want, it.name, why));
+        m_status->setText(QStringLiteral("%1「%2」失败：%3").arg(want, it.name, why));
         return;
     }
     it.enabled = !it.enabled;
-    m_status->setText(QStringLiteral("已%1「%2」：读回来核对过了，任务管理器 · 启动 里看到的也是这个状态。")
+    m_status->setText(QStringLiteral("已成功%1「%2」（已与 Windows 任务管理器保持同步）。")
                           .arg(want, it.name));
     rebuildList();
 }

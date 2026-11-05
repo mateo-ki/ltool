@@ -321,48 +321,92 @@ QString oneLiner(const UserAccount::Info& i)
 UserAccountPage::UserAccountPage(QWidget* parent) : QWidget(parent)
 {
     auto* lay = new QVBoxLayout(this);
-    lay->setContentsMargins(10, 10, 10, 10);
+    lay->setContentsMargins(12, 10, 12, 10);
     lay->setSpacing(8);
+
+    // 顶部标题与系统特性标签
+    auto* titleRow = new QHBoxLayout;
+    titleRow->setSpacing(8);
+
+    auto* title = new QLabel(QStringLiteral("Windows 账户治理"), this);
+    QFont tf = title->font();
+    tf.setPointSize(tf.pointSize() + 3);
+    tf.setBold(true);
+    title->setFont(tf);
+
+    auto* tag1 = new QLabel(QStringLiteral("🛡️ UAC 安全提权"), this);
+    tag1->setStyleSheet("color:#ea580c;background:rgba(234,88,12,0.08);border:1px solid rgba(234,88,12,0.22);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500;");
+
+    auto* tag2 = new QLabel(QStringLiteral("⚡ 两段就地确认"), this);
+    tag2->setStyleSheet("color:#059669;background:rgba(5,150,105,0.08);border:1px solid rgba(5,150,105,0.22);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500;");
+
+    auto* tag3 = new QLabel(QStringLiteral("🔒 密码安全即焚"), this);
+    tag3->setStyleSheet("color:#7c3aed;background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.22);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:500;");
+
+    titleRow->addWidget(title);
+    titleRow->addWidget(tag1);
+    titleRow->addWidget(tag2);
+    titleRow->addWidget(tag3);
+    titleRow->addStretch(1);
+    lay->addLayout(titleRow);
+
+    auto* tip = new QLabel(QStringLiteral(
+        "查看当前登录账户属性（本地/微软账户、SID 标识与 Profile 目录），支持快捷修改显示名、登录名或新建本地用户。"), this);
+    tip->setObjectName(QStringLiteral("tip"));
+    tip->setWordWrap(true);
+    lay->addWidget(tip);
 
     // ---- 形状：方案 B（单列到底，动作一律在行尾）----
     // 摘要行 + 行尾「重读」
     auto* head = new QHBoxLayout;
     head->setSpacing(8);
     m_state = new QLabel(this);
+    m_state->setObjectName(QStringLiteral("accountSummary"));
     m_state->setTextInteractionFlags(Qt::TextSelectableByMouse);
     head->addWidget(m_state, 1);
     auto* reload = new QPushButton(QStringLiteral("重读"), this);
     reload->setObjectName(QStringLiteral("reload"));
+    reload->setCursor(Qt::PointingHandCursor);
+    reload->setFixedHeight(32);
     head->addWidget(reload);
     lay->addLayout(head);
 
-    // 话只有一行，而且常驻：三颗按钮的过程和结果都写在这里，不再另开模态框。
-    // 位置在所有动作行**下面**：这条会换文字、可能从一行变两行，摆在上面的话一按就把
-    // 输入框和按钮往下推（他否过"点一下版面重新排"）；摆在底下，上面那些一颗都不动。
-    m_hint = new QLabel(this);
-    m_hint->setObjectName(QStringLiteral("muted"));
-    m_hint->setWordWrap(true);
-    m_hint->setText(QStringLiteral("改显示名只动登录界面/开始菜单那个名字；改账户名不动 C:\\Users 目录，"
-                                  "要注销再登才全面生效。三个动作都要管理员授权（会弹 UAC）。"));
-
     auto* rowFull = new QHBoxLayout;
     rowFull->setSpacing(8);
+    auto* lblFull = new QLabel(QStringLiteral("显示名"), this);
+    lblFull->setFixedWidth(54);
+    lblFull->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    lblFull->setStyleSheet("color:#64748b;font-size:12px;font-weight:500;");
     m_full = new QLineEdit(this);
     m_full->setObjectName(QStringLiteral("fullInput"));
-    m_full->setPlaceholderText(QStringLiteral("显示名：登录界面和开始菜单里那个名字"));
+    m_full->setFixedHeight(32);
+    m_full->setPlaceholderText(QStringLiteral("修改显示名称（登录界面与锁屏显示）"));
     m_applyFull = new QPushButton(QStringLiteral("改显示名"), this);
     m_applyFull->setObjectName(QStringLiteral("applyFull"));
+    m_applyFull->setCursor(Qt::PointingHandCursor);
+    m_applyFull->setFixedHeight(32);
+    m_applyFull->setMinimumWidth(80);
+    rowFull->addWidget(lblFull);
     rowFull->addWidget(m_full, 1);
     rowFull->addWidget(m_applyFull);
     lay->addLayout(rowFull);
 
     auto* rowName = new QHBoxLayout;
     rowName->setSpacing(8);
+    auto* lblName = new QLabel(QStringLiteral("登录名"), this);
+    lblName->setFixedWidth(54);
+    lblName->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    lblName->setStyleSheet("color:#64748b;font-size:12px;font-weight:500;");
     m_name = new QLineEdit(this);
     m_name->setObjectName(QStringLiteral("nameInput"));
-    m_name->setPlaceholderText(QStringLiteral("账户名：最长 20 个字符，改了不会动 C:\\Users 目录"));
+    m_name->setFixedHeight(32);
+    m_name->setPlaceholderText(QStringLiteral("修改登录账户名（最长 20 字符，不改动用户目录）"));
     m_applyName = new QPushButton(QStringLiteral("改账户名"), this);
     m_applyName->setObjectName(QStringLiteral("applyName"));
+    m_applyName->setCursor(Qt::PointingHandCursor);
+    m_applyName->setFixedHeight(32);
+    m_applyName->setMinimumWidth(80);
+    rowName->addWidget(lblName);
     rowName->addWidget(m_name, 1);
     rowName->addWidget(m_applyName);
     lay->addLayout(rowName);
@@ -371,32 +415,54 @@ UserAccountPage::UserAccountPage(QWidget* parent) : QWidget(parent)
     auto* gap = new QFrame(this);
     gap->setFrameShape(QFrame::HLine);
     gap->setFrameShadow(QFrame::Plain);
+    gap->setStyleSheet("color:rgba(127,127,127,0.20);");
     lay->addWidget(gap);
 
     auto* rowNew = new QHBoxLayout;
     rowNew->setSpacing(8);
+    auto* lblNew = new QLabel(QStringLiteral("新建"), this);
+    lblNew->setFixedWidth(54);
+    lblNew->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    lblNew->setStyleSheet("color:#64748b;font-size:12px;font-weight:500;");
     m_newName = new QLineEdit(this);
     m_newName->setObjectName(QStringLiteral("newName"));
-    m_newName->setPlaceholderText(QStringLiteral("新账户的登录名（最长 20 个字符）"));
+    m_newName->setFixedHeight(32);
+    m_newName->setPlaceholderText(QStringLiteral("新账户名 (≤20字)"));
+    m_newName->setToolTip(QStringLiteral("新本地用户的登录账户名，最长 20 个字符"));
     m_newFull = new QLineEdit(this);
     m_newFull->setObjectName(QStringLiteral("newFull"));
-    m_newFull->setPlaceholderText(QStringLiteral("新账户显示名（留空就用登录名）"));
+    m_newFull->setFixedHeight(32);
+    m_newFull->setPlaceholderText(QStringLiteral("显示名 (选填)"));
+    m_newFull->setToolTip(QStringLiteral("新用户的显示名称，留空则默认使用登录名"));
     m_newPass = new QLineEdit(this);
     m_newPass->setObjectName(QStringLiteral("newPass"));
+    m_newPass->setFixedHeight(32);
     m_newPass->setEchoMode(QLineEdit::Password);
-    m_newPass->setPlaceholderText(QStringLiteral("密码（必填）"));
+    m_newPass->setPlaceholderText(QStringLiteral("登录密码 (必填)"));
+    m_newPass->setToolTip(QStringLiteral("新用户的登录密码（必填）"));
     m_create = new QPushButton(QStringLiteral("新建用户"), this);
     m_create->setObjectName(QStringLiteral("applyCreate"));
+    m_create->setCursor(Qt::PointingHandCursor);
+    m_create->setFixedHeight(32);
+    m_create->setMinimumWidth(80);
+    rowNew->addWidget(lblNew);
     rowNew->addWidget(m_newName, 2);
     rowNew->addWidget(m_newFull, 2);
     rowNew->addWidget(m_newPass, 2);
     rowNew->addWidget(m_create);
     lay->addLayout(rowNew);
 
-    m_newAdmin = new QCheckBox(QStringLiteral("给这个新账户管理员权限（加入 Administrators 组）"), this);
+    auto* adminRow = new QHBoxLayout;
+    adminRow->setSpacing(8);
+    auto* lblSpacer = new QLabel(this);
+    lblSpacer->setFixedWidth(54);
+    m_newAdmin = new QCheckBox(QStringLiteral("授予此新账户管理员权限（加入 Administrators 组）"), this);
     m_newAdmin->setObjectName(QStringLiteral("newAdmin"));
+    m_newAdmin->setCursor(Qt::PointingHandCursor);
     m_newAdmin->setChecked(true);
-    lay->addWidget(m_newAdmin);
+    adminRow->addWidget(lblSpacer);
+    adminRow->addWidget(m_newAdmin, 1);
+    lay->addLayout(adminRow);
 
     m_armTimer = new QTimer(this);
     m_armTimer->setSingleShot(true);
@@ -408,14 +474,70 @@ UserAccountPage::UserAccountPage(QWidget* parent) : QWidget(parent)
         m_hint->setText(QStringLiteral("没动手：六秒内没再点第二下，确认已经收回。"));
     });
 
-    lay->addWidget(m_hint);
+    auto* hintRow = new QHBoxLayout;
+    hintRow->setSpacing(8);
+    auto* hintIcon = new QLabel(QStringLiteral("💡"), this);
+    hintIcon->setAlignment(Qt::AlignTop);
+    m_hint = new QLabel(this);
+    m_hint->setObjectName(QStringLiteral("hintText"));
+    m_hint->setWordWrap(true);
+    m_hint->setText(QStringLiteral("修改显示名只动登录界面/开始菜单名字；修改账户名不动 C:\\Users 目录，"
+                                  "注销重登后生效。操作需管理员授权（弹 UAC）。"));
+    hintRow->addWidget(hintIcon);
+    hintRow->addWidget(m_hint, 1);
+    lay->addLayout(hintRow);
     lay->addStretch(1);
+
+    setStyleSheet(
+        "QPushButton#applyFull, QPushButton#applyName{"
+        "  padding:5px 14px;border-radius:6px;font-size:12px;font-weight:500;"
+        "}"
+        "QPushButton#applyCreate{"
+        "  padding:5px 14px;border-radius:6px;font-size:12px;font-weight:600;"
+        "  background:rgba(120,90,200,0.12);border:1px solid rgba(120,90,200,0.30);color:#7c3aed;"
+        "}"
+        "QPushButton#applyCreate:hover{"
+        "  background:rgba(120,90,200,0.22);"
+        "}"
+        "QPushButton#reload{"
+        "  padding:5px 12px;border-radius:6px;font-size:12px;"
+        "}"
+        "QPushButton[armed=\"true\"]{"
+        "  background:#ea580c !important;color:#ffffff !important;"
+        "  border:1px solid #c2410c !important;font-weight:600 !important;"
+        "}"
+        "QPushButton[armed=\"true\"]:hover{"
+        "  background:#f97316 !important;"
+        "}"
+        "QLineEdit{"
+        "  border:1px solid rgba(127,127,127,0.25);border-radius:6px;"
+        "  padding:4px 8px;font-size:12px;"
+        "}"
+        "QLineEdit:focus{"
+        "  border:1px solid #0284c7;"
+        "}"
+        "QLabel#accountSummary{"
+        "  background:rgba(127,127,127,0.06);border:1px solid rgba(127,127,127,0.18);"
+        "  border-radius:6px;padding:6px 10px;font-size:12px;font-family:Consolas, 'Segoe UI', monospace;"
+        "}"
+        "QLabel#hintText{"
+        "  color:#64748b;background:rgba(127,127,127,0.05);border:1px dashed rgba(127,127,127,0.20);"
+        "  border-radius:6px;padding:6px 10px;font-size:12px;line-height:1.4;"
+        "}");
 
     connect(m_applyFull, &QPushButton::clicked, this, &UserAccountPage::applyFullName);
     connect(m_applyName, &QPushButton::clicked, this, &UserAccountPage::applyAccountName);
     connect(m_create, &QPushButton::clicked, this, &UserAccountPage::createNewUser);
     connect(reload, &QPushButton::clicked, this, &UserAccountPage::refresh);
     refresh();
+}
+
+UserAccountPage::~UserAccountPage()
+{
+    if (m_watcher)
+        m_watcher->disconnect(this);
+    if (m_armTimer)
+        m_armTimer->stop();
 }
 
 void UserAccountPage::refresh()
@@ -473,6 +595,9 @@ bool UserAccountPage::armOrRun(QPushButton* btn, const QString& confirmText, con
     m_armedText = btn->text();
     m_armed = btn;
     btn->setText(confirmText);
+    btn->setProperty("armed", true);
+    btn->style()->unpolish(btn);
+    btn->style()->polish(btn);
     m_hint->setText(risk);
     m_armTimer->start(6000);
     Utils::log(QStringLiteral("username: %1 摆出两段确认（再点一下才动手）").arg(btn->objectName()));
@@ -484,6 +609,9 @@ void UserAccountPage::disarm()
     if (!m_armed)
         return;
     m_armed->setText(m_armedText);
+    m_armed->setProperty("armed", false);
+    m_armed->style()->unpolish(m_armed);
+    m_armed->style()->polish(m_armed);
     m_armed = nullptr;
     m_armTimer->stop();
 }
