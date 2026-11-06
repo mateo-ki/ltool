@@ -130,18 +130,27 @@ int userPageSelftest()
     }
     check("改显示名/改账户名/新建用户 三颗按钮都在布局里", QString::number(onLayout),
           QStringLiteral("3"));
-    // 后台那次读取要真等到回包，别拿"正在读"当状态
-    for (int i = 0; i < 120; ++i) {
+    // 后台那次读取要真等到回包，别拿"正在读"当状态。
+    // 必须按 objectName("accountSummary") 找状态行，并在量 yFull 坐标之前真正等按钮放开：
+    // 以前遍历所有 QLabel 找「账户名」三个字，结果 120*20ms=2.4s 在 CI runner 上不够 powershell
+    // 跑完时，底部常驻说明 m_hint（「修改账户名不动…」）被误当成状态行假绿混过去，
+    // 导致 167 行量 yFull 时 m_state 还是单行的「正在读账户信息…」（yFull=109，页高 343），
+    // 等到后面再等按钮放开时 applyInfo 才填上两行真摘要，武装后重排变成 yFull=127（+18px）。
+    QLineEdit* nameIn = page.findChild<QLineEdit*>(QString::fromLatin1("nameInput"));
+    QPushButton* nameBtn = page.findChild<QPushButton*>(QString::fromLatin1("applyName"));
+    QPushButton* fullBtn = page.findChild<QPushButton*>(QString::fromLatin1("applyFull"));
+    QLabel* summaryLbl = page.findChild<QLabel*>(QString::fromLatin1("accountSummary"));
+    for (int i = 0; i < 600; ++i) {
         QCoreApplication::processEvents();
+        if ((fullBtn && fullBtn->isEnabled())
+            || (summaryLbl && !summaryLbl->text().contains(QStringLiteral("正在读"))))
+            break;
         QThread::msleep(20);
     }
-    const auto labels = page.findChildren<QLabel*>();
-    QString state;
-    for (const QLabel* l : labels)
-        if (l->text().contains(QStringLiteral("账户名")))
-            state = l->text();
+    const bool ready = nameBtn && nameBtn->isEnabled();
+    const QString state = summaryLbl ? summaryLbl->text() : QString();
     has("页面读完之后状态行填上了（不是停在「正在读」）",
-        !state.isEmpty() && !state.contains(QStringLiteral("正在读")));
+        state.contains(QStringLiteral("账户名")) && !state.contains(QStringLiteral("正在读")));
 
     // ---- 形状（他挑的方案 B）：单列到底、动作一律在行尾、第一下不弹框也不把上面挪走 ----
     int rowEndActions = 0;
@@ -164,6 +173,7 @@ int userPageSelftest()
 
     // 几何断言：先把版面撑开量一遍，再点"改账户名"的第一下，上面那些一颗都不许挪。
     // 这里只点一下（摆出确认），绝不会点第二下 —— 第二下会真去提权弹 UAC，那不可逆。
+    page.ensurePolished();
     page.resize(560, 320);
     // 挤压态（这页装不下 320）里所有标签都被压成同一个高度，几何判据就成了空转 ——
     // 量之前先把版面还给它能显示的那块。这个坑是"把钉子拆掉判据却照样绿"那次照出来的。
@@ -172,7 +182,6 @@ int userPageSelftest()
         if (needH > page.height())
             page.resize(page.width(), needH);
     }
-    page.ensurePolished();
     if (page.layout()) {
         page.layout()->invalidate();
         page.layout()->activate();
@@ -188,19 +197,8 @@ int userPageSelftest()
     // 不钉这一条的话，布局没排开时三个 y 全是 0，下面那条"没挪走"就在 0==0 上空转（装饰性的绿）
     has("离屏版面真的排开了（三行的 y 是互不相同的正数）",
         yFull > 0 && yGap > yFull && yAdmin > yGap);
-    QLineEdit* nameIn = page.findChild<QLineEdit*>(QString::fromLatin1("nameInput"));
-    QPushButton* nameBtn = page.findChild<QPushButton*>(QString::fromLatin1("applyName"));
-    // 点之前先等页面自己把两颗按钮放开（那是"后台那次读到了"的唯一信号）。
-    // CI 那台 runner 上 powershell 起得慢，不等就是对着禁用态的按钮 click()：空操作，
-    // 于是"点第一下摆出确认"红、而"收回原字"假绿（没武装过也等于收回了）—— 2026-10-17 就这样红过。
-    bool ready = false;
-    for (int i = 0; i < 250 && !ready; ++i) {
-        QCoreApplication::processEvents();
-        QThread::msleep(20);
-        ready = nameBtn && nameBtn->isEnabled();
-    }
     if (!ready) {
-        std::printf("SKIP 就地两段确认那 4 条：页面 5 秒内没读到账户信息（按钮还在禁用态），"
+        std::printf("SKIP 就地两段确认那 4 条：页面 10 秒内没读到账户信息（按钮还在禁用态），"
                     "对着禁用按钮 click() 量不到任何东西\n");
         check("读不到账户时两颗按钮是禁用态（不许按）",
               nameBtn && !nameBtn->isEnabled() ? QStringLiteral("yes") : QStringLiteral("no"),

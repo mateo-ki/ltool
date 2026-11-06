@@ -806,6 +806,8 @@ void UserAccountPage::reserveHintHeight()
         return;
     m_pinningHint = true;
     ensurePolished();
+    for (QWidget* child : findChildren<QWidget*>())
+        child->ensurePolished();
     // 先让版面排开再读宽度：resizeEvent 里那颗标签的几何还是上一轮的，
     // 拿那个宽度去 heightForWidth 会算出"每行一个字"的假高度（第一次就留过 376px 的空块）。
     if (layout()) {
