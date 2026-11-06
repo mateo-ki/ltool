@@ -323,11 +323,41 @@ QString baseHintText()
                           "注销重登后生效。操作需管理员授权（弹 UAC）。");
 }
 
+// 离屏（未 show）的 QWidget 调 resize() 时 Qt 只挂 WA_PendingResizeEvent、不发 resizeEvent；
+// 自测与嵌入宿主切页前都在离屏态排布局，必须在 heightForWidth / setGeometry 里同步重钉说明行高度。
+class PageLayout : public QVBoxLayout {
+public:
+    using QVBoxLayout::QVBoxLayout;
+    std::function<void()> syncHint;
+    mutable int lastW = -1;
+
+    int heightForWidth(int w) const override
+    {
+        if (syncHint && w != lastW) {
+            lastW = w;
+            syncHint();
+            const_cast<PageLayout*>(this)->invalidate();
+        }
+        return QVBoxLayout::heightForWidth(w);
+    }
+
+    void setGeometry(const QRect& r) override
+    {
+        QVBoxLayout::setGeometry(r);
+        if (syncHint && r.width() != lastW) {
+            lastW = r.width();
+            syncHint();
+            QVBoxLayout::setGeometry(r);
+        }
+    }
+};
+
 } // namespace
 
 UserAccountPage::UserAccountPage(QWidget* parent) : QWidget(parent)
 {
-    auto* lay = new QVBoxLayout(this);
+    auto* lay = new PageLayout(this);
+    lay->syncHint = [this] { reserveHintHeight(); };
     lay->setContentsMargins(12, 10, 12, 10);
     lay->setSpacing(8);
 
@@ -738,19 +768,19 @@ void UserAccountPage::createNewUser()
 QString UserAccountPage::riskFullText() const
 {
     return QStringLiteral("第二下才会提交：只改登录界面/开始菜单显示的名字，"
-                          "不动账户名，也不动 C:\Users 目录。要管理员授权。");
+                          "不动账户名，也不动 C:\\Users 目录。要管理员授权。");
 }
 
 QString UserAccountPage::riskNameText(const QString& who) const
 {
-    return QStringLiteral("第二下才会提交：C:\Users\%1 那个目录不会跟着改名，写死了旧路径的"
+    return QStringLiteral("第二下才会提交：C:\\Users\\%1 那个目录不会跟着改名，写死了旧路径的"
                           "程序也不会自己跟上；改完要注销再登录才全面生效。要管理员授权。").arg(who);
 }
 
 QString UserAccountPage::riskCreateText(const QString& machine, const QString& who, bool admin) const
 {
     return QStringLiteral("第二下才会真建：在本机 %1 上建本地账户「%2」%3；"
-                          "它第一次登录时 Windows 会给它建一个新的 C:\Users 目录；"
+                          "它第一次登录时 Windows 会给它建一个新的 C:\\Users 目录；"
                           "密码会临时写进一个脚本文件、跑完立刻删 —— 那一瞬间它是在盘上的。")
         .arg(machine, who,
              admin ? QStringLiteral("并加入 Administrators 组（那是完整的管理员权限）")
@@ -775,6 +805,7 @@ void UserAccountPage::reserveHintHeight()
     if (!m_hint || m_pinningHint)
         return;
     m_pinningHint = true;
+    ensurePolished();
     // 先让版面排开再读宽度：resizeEvent 里那颗标签的几何还是上一轮的，
     // 拿那个宽度去 heightForWidth 会算出"每行一个字"的假高度（第一次就留过 376px 的空块）。
     if (layout()) {
@@ -783,14 +814,21 @@ void UserAccountPage::reserveHintHeight()
     }
     const int w = m_hint->width() > 1 ? m_hint->width() : m_hint->sizeHint().width();
     const QString shown = m_hint->text();
-    int need = m_hint->sizeHint().height();
+    m_hint->setMinimumHeight(0);
+    m_hint->setMaximumHeight(QWIDGETSIZE_MAX);
+    int need = 0;
     for (const QString& t : hintArmTexts()) {
         m_hint->setText(t);
         need = qMax(need, m_hint->heightForWidth(w));
     }
     m_hint->setText(shown);
-    if (m_hint->minimumHeight() != need)
+    if (need > 0) {
         m_hint->setFixedHeight(need);
+        if (layout()) {
+            layout()->invalidate();
+            layout()->activate();
+        }
+    }
     m_pinningHint = false;
 }
 

@@ -173,8 +173,10 @@ int userPageSelftest()
             page.resize(page.width(), needH);
     }
     page.ensurePolished();
-    if (page.layout())
+    if (page.layout()) {
+        page.layout()->invalidate();
         page.layout()->activate();
+    }
     const auto yOf = [&page](const char* objName) {
         QWidget* w = page.findChild<QWidget*>(QString::fromLatin1(objName));
         return w ? w->y() : -1;

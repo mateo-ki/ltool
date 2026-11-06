@@ -229,14 +229,15 @@ int runSmokeTest()
         const bool hasUsn = vol.open(QStringLiteral("C:/"));
         if (hasUsn)
             vol.close();
-        if (!hasUsn && qEnvironmentVariableIsSet("LTOOL_DATA_DIR")) {
+        const bool hasSnapshot = QFileInfo::exists(Utils::dataDir() + "/deepindex.dat");
+        if ((!hasUsn || !hasSnapshot) && qEnvironmentVariableIsSet("LTOOL_DATA_DIR")) {
             QSettings cfg(Utils::dataDir() + "/config.ini", QSettings::IniFormat);
             cfg.setValue(QStringLiteral("index/deep"), false);
             cfg.sync();
         }
-        // 裸 --smoke（没沙箱）：不写配置，只把本次运行的深扫跳掉 ——
-        // 通过临时环境变量让 FileIndexer 读到 false 而不落盘。
-        if (!hasUsn && !qEnvironmentVariableIsSet("LTOOL_DATA_DIR"))
+        // 裸 --smoke（没沙箱）：无管理员或尚无快照时不写配置，只把本次全盘深扫跳掉 ——
+        // CI 干净机器没有快照，跑全盘重建必撞 30s files=TIMEOUT 并在退出时卡死线程池（240s exit 124）。
+        if ((!hasUsn || !hasSnapshot) && !qEnvironmentVariableIsSet("LTOOL_DATA_DIR"))
             qputenv("LTOOL_SMOKE_SKIP_DEEP", "1");
     }
 
